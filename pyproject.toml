@@ -1,6 +1,6 @@
 [project]
 name = "weave"
-version = "0.0.1"
+version = "0.0.2"
 description = "Conversation runtime/harness for Loom-built agents (branching, sessions, channels)."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -8,7 +8,7 @@ requires-python = ">=3.11"
 # uses it through its public API only. The dependency is unidirectional — Loom
 # never imports Weave, and stays installable on its own.
 dependencies = [
-    "loom-declarative",
+    "loom-declarative @ git+https://github.com/jdbaigorria/loom-dev@v1.0.0rc1",
 ]
 
 [project.urls]
@@ -28,8 +28,10 @@ fastapi = [
     "fastapi>=0.110.0",
 ]
 
-# During co-development Loom is the local sibling checkout, installed editable.
-# When Weave stabilises, drop this and pin a released loom-declarative version.
+# Overrides the git+https pin above with the local sibling checkout for
+# day-to-day co-dev (`uv sync` picks this up). A consumer building from source
+# (`uv export --no-sources`, or plain `pip install`/`uv add` without this file)
+# falls back to the pinned tag in `dependencies` instead.
 [tool.uv.sources]
 loom-declarative = { path = "../loom-dev", editable = true }
 
