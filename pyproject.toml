@@ -55,6 +55,11 @@ docs = [
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[tool.hatch.metadata]
+# Needed for the loom-declarative dependency's git+https direct reference
+# (dependencies, above) — Hatchling rejects direct references by default.
+allow-direct-references = true
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/weave"]
 
