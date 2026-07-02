@@ -1,6 +1,6 @@
 [project]
 name = "weave"
-version = "0.0.2"
+version = "0.0.3"
 description = "Conversation runtime/harness for Loom-built agents (branching, sessions, channels)."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -28,10 +28,16 @@ fastapi = [
     "fastapi>=0.110.0",
 ]
 
-# Overrides the git+https pin above with the local sibling checkout for
-# day-to-day co-dev (`uv sync` picks this up). A consumer building from source
-# (`uv export --no-sources`, or plain `pip install`/`uv add` without this file)
-# falls back to the pinned tag in `dependencies` instead.
+# Local sibling checkout for this repo's own co-dev (`uv sync` picks this up).
+# Needed even though a consumer (fastro) also overrides loom-declarative in its
+# own [tool.uv.sources]: when weave is resolved from a local editable path,
+# uv's cross-project resolution needs weave's own declared source to agree with
+# the consumer's, or it reports a hard conflict. When weave is consumed as a
+# git dependency instead (a container build, not `uv sync`/`uv pip install`),
+# this table is not read — see the git+https-install note in
+# fastro/backend/Dockerfile (installs weave/loom-declarative via plain `pip`,
+# which doesn't understand tool.uv.sources, deliberately, to avoid this exact
+# path leaking into a git-cloned copy of this repo).
 [tool.uv.sources]
 loom-declarative = { path = "../loom-dev", editable = true }
 
