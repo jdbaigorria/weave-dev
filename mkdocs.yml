@@ -1,0 +1,82 @@
+site_name: Weave
+site_description: Conversation runtime / harness for Loom-built agents.
+site_url: https://jdbaigorria.github.io/weave-dev
+repo_url: https://github.com/jdbaigorria/weave-dev
+repo_name: jdbaigorria/weave-dev
+edit_uri: edit/main/docs/
+docs_dir: docs
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: deep purple
+      accent: deep purple
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: deep purple
+      accent: deep purple
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.sections
+    - navigation.top
+    - navigation.indexes
+    - toc.follow
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.code.annotate
+
+nav:
+  - Home: index.md
+  - Concepts: concepts.md
+  - API cookbook: api-cookbook.md
+  - Features:
+      - Harness (run): harness.md
+      - Chat channel: chat-channel.md
+      - Streaming: streaming.md
+      - Fork (edit / regenerate): fork.md
+      - Input shaping: content.md
+      - Config source (DynamoDB): config-source.md
+      - Conversation registry: conversations.md
+      - Asset store: assets.md
+  - Observability: observability.md
+  - Deploying on Lambda: lambda.md
+
+plugins:
+  - search
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - def_list
+  - md_in_html
+  - toc:
+      permalink: true
+      toc_depth: 3
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+
+validation:
+  nav:
+    omitted_files: warn
+    not_found: warn
+
+copyright: Pre-alpha (v0.0.1).

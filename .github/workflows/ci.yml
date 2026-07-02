@@ -1,0 +1,156 @@
+name: CI
+
+# Weave depends on Loom via a local sibling checkout ([tool.uv.sources] points at
+# ../loom-dev, editable). CI mirrors that layout: checkout weave into ./weave-dev
+# and loom into ./loom-dev, then run everything with weave-dev as the working
+# directory so the relative path resolves the same way it does locally.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: weave-dev
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      # ruff needs no Loom install, so skip the sibling checkout for this job.
+      - name: Run ruff (lint)
+        working-directory: weave-dev
+        run: uv run --no-project --with ruff ruff check src/ tests/
+
+      - name: Run ruff (format)
+        working-directory: weave-dev
+        run: uv run --no-project --with ruff ruff format --check src/ tests/
+
+  test:
+    name: Test (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: weave-dev
+
+      - uses: actions/checkout@v4
+        with:
+          repository: jdbaigorria/loom-dev
+          path: loom-dev
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        working-directory: weave-dev
+        run: uv sync --group dev --all-extras
+
+      - name: Run tests with coverage
+        working-directory: weave-dev
+        run: uv run pytest --cov=weave --cov-report=term-missing --cov-report=xml
+
+      - name: Upload coverage report
+        uses: codecov/codecov-action@v5
+        if: matrix.python-version == '3.14'
+        with:
+          files: weave-dev/coverage.xml
+          fail_ci_if_error: false
+
+  type-check:
+    name: Type Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: weave-dev
+
+      - uses: actions/checkout@v4
+        with:
+          repository: jdbaigorria/loom-dev
+          path: loom-dev
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install dependencies
+        working-directory: weave-dev
+        run: uv sync --group dev --all-extras
+
+      - name: Run mypy
+        working-directory: weave-dev
+        run: uv run mypy src/weave
+
+  package:
+    name: Package smoke test
+    runs-on: ubuntu-latest
+    # Weave has no CLI/scaffolding to smoke-test (unlike Loom's `loom init`) — this
+    # just confirms the wheel builds and the top-level package actually imports,
+    # which already exercises the real dependency on Loom's public API.
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: weave-dev
+
+      - uses: actions/checkout@v4
+        with:
+          repository: jdbaigorria/loom-dev
+          path: loom-dev
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Build wheel
+        working-directory: weave-dev
+        run: uv build --wheel
+
+      - name: Install wheel into a clean venv
+        working-directory: weave-dev
+        run: |
+          uv venv /tmp/weave-smoke
+          uv pip install --python /tmp/weave-smoke/bin/python \
+            "$(echo dist/*.whl)[fastapi,aws]" \
+            "loom-declarative @ ../loom-dev"
+
+      - name: Package imports
+        working-directory: weave-dev
+        run: /tmp/weave-smoke/bin/python -c "import weave; print(weave.__doc__[:40])"

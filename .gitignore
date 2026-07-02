@@ -1,0 +1,52 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+*$py.class
+build/
+dist/
+wheels/
+*.egg-info/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Test/type/coverage caches
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# Local env/secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+
+# Logs and temp files
+*.log
+*.tmp
+*.temp
+.DS_Store
+Thumbs.db
+
+# Working docs (design notes, not part of the package)
+.docs/
+
+# Built documentation site (mkdocs build output)
+site/
+
+# Editor/agent
+CLAUDE.md
+.claude/
+.loom/
+.cursor/
+.idea/
+.vscode/

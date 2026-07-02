@@ -1,0 +1,109 @@
+[project]
+name = "weave"
+version = "0.0.1"
+description = "Conversation runtime/harness for Loom-built agents (branching, sessions, channels)."
+readme = "README.md"
+requires-python = ">=3.11"
+# Weave is the runtime/harness: it depends on Loom (the declarative engine) and
+# uses it through its public API only. The dependency is unidirectional — Loom
+# never imports Weave, and stays installable on its own.
+dependencies = [
+    "loom-declarative",
+]
+
+[project.urls]
+Homepage = "https://github.com/jdbaigorria/weave-dev"
+Repository = "https://github.com/jdbaigorria/weave-dev"
+Issues = "https://github.com/jdbaigorria/weave-dev/issues"
+
+[project.optional-dependencies]
+# Driven adapters that reach AWS (S3 asset store, Dynamo state, Bedrock channels).
+aws = [
+    "boto3>=1.26.0",
+]
+
+# The mountable chat channel's FastAPI APIRouter (weave.adapters.driving.chat).
+# The ChatChannel core needs none of this; only chat_router imports FastAPI.
+fastapi = [
+    "fastapi>=0.110.0",
+]
+
+# During co-development Loom is the local sibling checkout, installed editable.
+# When Weave stabilises, drop this and pin a released loom-declarative version.
+[tool.uv.sources]
+loom-declarative = { path = "../loom-dev", editable = true }
+
+[dependency-groups]
+dev = [
+    "fastapi>=0.110.0",
+    "httpx>=0.27.0",
+    "mypy>=1.15.0",
+    "poethepoet>=0.42.1",
+    "pytest>=8.0.0",
+    "pytest-cov>=6.0.0",
+    "pytest-mock>=3.14.0",
+    "ruff>=0.15.2",
+]
+docs = [
+    "mkdocs>=1.6.0",
+    "mkdocs-material>=9.5.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/weave"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "--import-mode=importlib"
+
+[tool.coverage.run]
+source = ["src/weave"]
+omit = ["tests/*"]
+
+[tool.mypy]
+python_version = "3.11"
+mypy_path = "src"
+strict = false
+ignore_missing_imports = true
+warn_unused_ignores = true
+warn_return_any = true
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP", "TID"]
+# Relative imports within subpackages are by convention; E501 handled by formatter.
+ignore = ["E501", "TID252"]
+
+[tool.ruff.lint.per-file-ignores]
+# The fake S3 client mirrors boto3's PascalCase kwargs (Bucket/Key/...) on purpose.
+"tests/test_asset_store.py" = ["N803"]
+# The fake DynamoDB table mirrors boto3's PascalCase kwargs (Key/Item) on purpose.
+"tests/test_dynamo_config_source.py" = ["N803"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["weave"]
+
+# Boundary discipline: Weave uses Loom through its public surface, never its
+# engine internals or vendor anti-corruption layer. Reaching into loom.core /
+# loom.adapters is a layering violation (it would couple the harness to engine
+# internals that may change). The public factory (loom.build), context, request/
+# response, config schemas and ports are fair game.
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"loom.core".msg = "Use Loom's public API, not its engine internals (loom.core)."
+"loom.adapters".msg = "Do not import Loom's vendor anti-corruption layer (loom.adapters)."
+
+[tool.poe.tasks]
+format     = "ruff format src tests"
+lint       = "ruff check src tests --fix"
+type       = "mypy src/weave"
+test       = "pytest"
+docs       = "mkdocs serve"
+docs-build = "mkdocs build --strict"
