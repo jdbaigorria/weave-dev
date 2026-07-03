@@ -54,7 +54,7 @@ class _FakeEngine:
     def __init__(self, agent: _FakeAgent) -> None:
         self.agent = agent
 
-    def build_agent(self, name: str, session: LoomSession):
+    def build_agent(self, name: str, session: LoomSession, *, model_params=None):
         return self.agent
 
 

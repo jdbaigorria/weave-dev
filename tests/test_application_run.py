@@ -57,8 +57,8 @@ class _FakeEngine:
         self.agent = agent
         self.built_with: dict[str, Any] = {}
 
-    def build_agent(self, name: str, session: LoomSession):
-        self.built_with = {"name": name, "session": session}
+    def build_agent(self, name: str, session: LoomSession, *, model_params=None):
+        self.built_with = {"name": name, "session": session, "model_params": model_params}
         return self.agent
 
 
@@ -91,6 +91,21 @@ def test_run_agent_defaults_invocation_state_to_empty():
     agent = _FakeAgent()
     asyncio.run(run_agent(_FakeEngine(agent), "assistant", "hi", _session()))
     assert agent.invoked_with["invocation_state"] == {}
+
+
+def test_run_agent_forwards_model_params_to_build_agent():
+    agent = _FakeAgent()
+    engine = _FakeEngine(agent)
+    overlay = {"boto_session": object()}
+    asyncio.run(run_agent(engine, "assistant", "hi", _session(), model_params=overlay))
+    assert engine.built_with["model_params"] is overlay
+
+
+def test_run_agent_defaults_model_params_to_none():
+    agent = _FakeAgent()
+    engine = _FakeEngine(agent)
+    asyncio.run(run_agent(engine, "assistant", "hi", _session()))
+    assert engine.built_with["model_params"] is None
 
 
 def test_run_agent_always_cleans_up_on_success():

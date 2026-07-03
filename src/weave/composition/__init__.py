@@ -69,13 +69,18 @@ async def run_agent(
     session: LoomSession,
     *,
     extras: dict[str, Any] | None = None,
+    model_params: dict[str, Any] | None = None,
 ) -> AgentReply:
     """Run agent ``name`` for one turn using the default (Loom) engine.
 
     The wired, batteries-included entry point — see
     :func:`weave.application.run.run_agent` for the dependency-injected core.
+
+    ``model_params`` is an optional per-run overlay of model constructor params — the
+    channel for injecting per-run secrets (e.g. a Bedrock ``boto_session``) without
+    persisting them in the config source.
     """
-    return await _run.run_agent(_engine, name, input, session, extras=extras)
+    return await _run.run_agent(_engine, name, input, session, extras=extras, model_params=model_params)
 
 
 def stream_agent(
@@ -84,13 +89,17 @@ def stream_agent(
     session: LoomSession,
     *,
     extras: dict[str, Any] | None = None,
+    model_params: dict[str, Any] | None = None,
 ) -> AsyncIterator[ChatStreamEvent]:
     """Token-stream agent ``name`` for one turn using the default (Loom) engine.
 
     Returns the :class:`~weave.application.reply.ChatStreamEvent` async-iterator
     (consume with ``async for``); see :func:`weave.application.run.stream_agent`.
+
+    ``model_params`` — optional per-run overlay of model constructor params (see
+    :func:`run_agent`).
     """
-    return _run.stream_agent(_engine, name, input, session, extras=extras)
+    return _run.stream_agent(_engine, name, input, session, extras=extras, model_params=model_params)
 
 
 async def run_workflow(
@@ -265,9 +274,10 @@ def run_agent_sync(
     session: LoomSession,
     *,
     extras: dict[str, Any] | None = None,
+    model_params: dict[str, Any] | None = None,
 ) -> AgentReply:
     """Synchronous :func:`run_agent` — for a caller without an event loop (Lambda)."""
-    return _block_on(run_agent(name, input, session, extras=extras))
+    return _block_on(run_agent(name, input, session, extras=extras, model_params=model_params))
 
 
 def run_workflow_sync(

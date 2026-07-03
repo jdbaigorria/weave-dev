@@ -35,7 +35,7 @@ class _Agent:
 
 
 class _Engine:
-    def build_agent(self, name, session):
+    def build_agent(self, name, session, *, model_params=None):
         return _Agent()
 
     def discover(self):

@@ -17,8 +17,15 @@ from loom import LoomSession, TargetInfo
 class AgentEngine(Protocol):
     """Builds runnable targets (native Strands objects) by name, and lists them."""
 
-    def build_agent(self, name: str, session: LoomSession) -> Any:
-        """Return a runnable ``strands.Agent`` (or ``BidiAgent``) for ``name``."""
+    def build_agent(
+        self, name: str, session: LoomSession, *, model_params: dict[str, Any] | None = None
+    ) -> Any:
+        """Return a runnable ``strands.Agent`` (or ``BidiAgent``) for ``name``.
+
+        ``model_params`` is an optional per-run overlay of model constructor params
+        (merged on top of the declarative config) — the channel for injecting per-run
+        secrets such as a Bedrock ``boto_session``.
+        """
         ...
 
     def build_workflow(self, name: str, session: LoomSession) -> tuple[Any, list[Any]]:

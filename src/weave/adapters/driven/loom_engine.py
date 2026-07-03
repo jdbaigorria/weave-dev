@@ -35,8 +35,10 @@ class LoomAgentEngine:
     def __init__(self, source: ConfigSource | None = None) -> None:
         self._source = source
 
-    def build_agent(self, name: str, session: LoomSession) -> Any:
-        return loom.build_agent(name, session, source=self._source)
+    def build_agent(
+        self, name: str, session: LoomSession, *, model_params: dict[str, Any] | None = None
+    ) -> Any:
+        return loom.build_agent(name, session, source=self._source, model_params=model_params)
 
     def build_workflow(self, name: str, session: LoomSession) -> tuple[Any, list[Any]]:
         return cast(
