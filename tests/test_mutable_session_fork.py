@@ -83,8 +83,9 @@ class _FakeEngine:
         self.agent = agent
         self.built = 0
 
-    def build_agent(self, name: str, session: LoomSession):
+    def build_agent(self, name: str, session: LoomSession, *, model_params=None):
         self.built += 1
+        self.last_model_params = model_params
         return self.agent
 
 

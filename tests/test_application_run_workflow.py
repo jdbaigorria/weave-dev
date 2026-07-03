@@ -56,8 +56,10 @@ class _FakeEngine:
     def __init__(self, workflow: _FakeWorkflow, node_agents: list[_FakeNodeAgent]) -> None:
         self._workflow = workflow
         self._node_agents = node_agents
+        self.built_with: dict = {}
 
-    def build_workflow(self, name: str, session: LoomSession):
+    def build_workflow(self, name: str, session: LoomSession, *, model_params=None):
+        self.built_with = {"name": name, "session": session, "model_params": model_params}
         return self._workflow, self._node_agents
 
 
@@ -77,6 +79,13 @@ def test_run_workflow_projects_reply():
     assert reply.usage.latency_ms == 200.0
     assert reply.execution_order == ["triage", "billing"]
     assert reply.session_id == "s-1"
+
+
+def test_run_workflow_forwards_model_params_to_build_workflow():
+    engine = _FakeEngine(_FakeWorkflow(_result()), [_FakeNodeAgent()])
+    overlay = {"boto_session": object()}
+    asyncio.run(run_workflow(engine, "support", "help", _session(), model_params=overlay))
+    assert engine.built_with["model_params"] is overlay
 
 
 def test_run_workflow_forwards_extras_as_invocation_state():

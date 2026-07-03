@@ -53,8 +53,10 @@ class _FakeAgent:
 class _FakeEngine:
     def __init__(self, agent: _FakeAgent) -> None:
         self.agent = agent
+        self.built_with: dict = {}
 
-    def build_agent(self, name: str, session: LoomSession):
+    def build_agent(self, name: str, session: LoomSession, *, model_params=None):
+        self.built_with = {"name": name, "session": session, "model_params": model_params}
         return self.agent
 
 
@@ -85,6 +87,13 @@ def test_fork_truncates_at_and_returns_new_transcript():
         {"role": "user", "content": "q2"},
         {"role": "assistant", "content": "a2-prime"},
     ]
+
+
+def test_fork_stateless_forwards_model_params_to_build_agent():
+    engine = _FakeEngine(_FakeAgent(_result("x")))
+    overlay = {"boto_session": object()}
+    asyncio.run(fork_stateless(engine, "assistant", _HISTORY, "q2", _session(), at=2, model_params=overlay))
+    assert engine.built_with["model_params"] is overlay
 
 
 def test_fork_regenerate_drops_last_exchange():
