@@ -65,7 +65,7 @@ class _Engine:
     def build_agent(self, name: str, session: LoomSession, *, model_params=None):
         return _Agent()
 
-    def build_workflow(self, name: str, session: LoomSession):
+    def build_workflow(self, name: str, session: LoomSession, *, model_params=None):
         return _Workflow(), [_NodeAgent()]
 
 

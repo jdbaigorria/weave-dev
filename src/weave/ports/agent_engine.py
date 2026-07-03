@@ -28,8 +28,14 @@ class AgentEngine(Protocol):
         """
         ...
 
-    def build_workflow(self, name: str, session: LoomSession) -> tuple[Any, list[Any]]:
-        """Return ``(workflow, node_agents)`` — a Graph/Swarm plus its node agents."""
+    def build_workflow(
+        self, name: str, session: LoomSession, *, model_params: dict[str, Any] | None = None
+    ) -> tuple[Any, list[Any]]:
+        """Return ``(workflow, node_agents)`` — a Graph/Swarm plus its node agents.
+
+        ``model_params`` is the per-run model-params overlay applied to every node
+        (see :meth:`build_agent`).
+        """
         ...
 
     def discover(self) -> list[TargetInfo]:

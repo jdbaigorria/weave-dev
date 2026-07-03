@@ -40,10 +40,12 @@ class LoomAgentEngine:
     ) -> Any:
         return loom.build_agent(name, session, source=self._source, model_params=model_params)
 
-    def build_workflow(self, name: str, session: LoomSession) -> tuple[Any, list[Any]]:
+    def build_workflow(
+        self, name: str, session: LoomSession, *, model_params: dict[str, Any] | None = None
+    ) -> tuple[Any, list[Any]]:
         return cast(
             "tuple[Any, list[Any]]",
-            loom.build_workflow(name, session, source=self._source),
+            loom.build_workflow(name, session, source=self._source, model_params=model_params),
         )
 
     def discover(self) -> list[TargetInfo]:

@@ -122,15 +122,17 @@ async def run_workflow(
     session: LoomSession,
     *,
     extras: dict[str, Any] | None = None,
+    model_params: dict[str, Any] | None = None,
 ) -> WorkflowReply:
     """Build multi-agent workflow ``name``, run it once, return a :class:`WorkflowReply`.
 
     Same lifecycle discipline as :func:`run_agent`, but a Graph/Swarm has no
     ``cleanup()`` of its own, so each node agent is torn down individually (closing
     its MCP connections). ``extras`` propagate to every node as ``invocation_state``.
+    ``model_params`` is applied to every node's model (one overlay per run).
     """
     logger.debug("building workflow %r (session=%s)", name, session.session_id)
-    workflow, node_agents = engine.build_workflow(name, session)
+    workflow, node_agents = engine.build_workflow(name, session, model_params=model_params)
     try:
         result = await workflow.invoke_async(input, invocation_state=extras or {})
     except Exception as exc:  # noqa: BLE001 — re-raised as a typed harness error
@@ -159,6 +161,7 @@ async def fork(
     at: int,
     extras: dict[str, Any] | None = None,
     agent_id: str = "default",
+    model_params: dict[str, Any] | None = None,
 ) -> AgentReply:
     """Rewind a **persisted** conversation to ``at`` and continue with ``input``.
 
@@ -194,7 +197,8 @@ async def fork(
         )
     store.truncate(session.session_id, keep=at, agent_id=agent_id)
 
-    agent = engine.build_agent(name, session)  # re-inits from the truncated session
+    # re-inits from the truncated session
+    agent = engine.build_agent(name, session, model_params=model_params)
     try:
         result = await agent.invoke_async(input, invocation_state=extras or {})
     except Exception as exc:  # noqa: BLE001 — re-raised as a typed harness error
@@ -214,6 +218,7 @@ async def fork_stateless(
     *,
     at: int | None = None,
     extras: dict[str, Any] | None = None,
+    model_params: dict[str, Any] | None = None,
 ) -> tuple[AgentReply, list[Any]]:
     """Like :func:`fork`, but for stateless agents — the caller owns the transcript.
 
@@ -221,7 +226,7 @@ async def fork_stateless(
     **and the new full transcript** for the caller to persist. Use when session
     persistence is off and your app holds the conversation itself.
     """
-    agent = engine.build_agent(name, session)
+    agent = engine.build_agent(name, session, model_params=model_params)
     agent.messages = list(history if at is None else history[:at])
     try:
         result = await agent.invoke_async(input, invocation_state=extras or {})
@@ -258,6 +263,7 @@ async def run(
     *,
     kind: str | None = None,
     extras: dict[str, Any] | None = None,
+    model_params: dict[str, Any] | None = None,
 ) -> AgentReply | WorkflowReply:
     """Run ``name`` one-shot, dispatching by kind (discovered unless ``kind`` is given).
 
@@ -269,9 +275,9 @@ async def run(
         "dispatching target %r as kind=%s (session=%s)", name, resolved, session.session_id
     )
     if resolved == "agent":
-        return await run_agent(engine, name, input, session, extras=extras)
+        return await run_agent(engine, name, input, session, extras=extras, model_params=model_params)
     if resolved == "workflow":
-        return await run_workflow(engine, name, input, session, extras=extras)
+        return await run_workflow(engine, name, input, session, extras=extras, model_params=model_params)
     if resolved == "bidi":
         raise HarnessError(f"'{name}' is a bidi (full-duplex) target — use open_stream, not run.")
     raise HarnessError(f"unknown kind '{resolved}' for target '{name}'.")

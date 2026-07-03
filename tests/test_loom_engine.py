@@ -62,6 +62,15 @@ def test_threads_injected_source_to_build_workflow():
     assert kwargs["source"] is source
 
 
+def test_threads_model_params_to_build_workflow():
+    engine = LoomAgentEngine()
+    overlay = {"boto_session": object()}
+    with patch("loom.build_workflow", return_value=(None, [])) as build_workflow:
+        engine.build_workflow("triage", _session(), model_params=overlay)
+    _, kwargs = build_workflow.call_args
+    assert kwargs["model_params"] is overlay
+
+
 def test_threads_injected_source_to_discover():
     source = object()
     engine = LoomAgentEngine(source=source)

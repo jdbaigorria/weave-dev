@@ -108,9 +108,13 @@ async def run_workflow(
     session: LoomSession,
     *,
     extras: dict[str, Any] | None = None,
+    model_params: dict[str, Any] | None = None,
 ) -> WorkflowReply:
-    """Run multi-agent workflow ``name`` for one turn using the default (Loom) engine."""
-    return await _run.run_workflow(_engine, name, input, session, extras=extras)
+    """Run multi-agent workflow ``name`` for one turn using the default (Loom) engine.
+
+    ``model_params`` — optional per-run overlay applied to every node's model.
+    """
+    return await _run.run_workflow(_engine, name, input, session, extras=extras, model_params=model_params)
 
 
 def open_stream(
@@ -118,12 +122,14 @@ def open_stream(
     session: LoomSession,
     *,
     extras: dict[str, Any] | None = None,
+    model_params: dict[str, Any] | None = None,
 ) -> BidiStream:
     """Open a full-duplex stream over bidi target ``name`` (default Loom engine).
 
     Use as ``async with open_stream("voice", session) as stream: ...``.
+    ``model_params`` — optional per-run model-params overlay (see :func:`run_agent`).
     """
-    return _stream.open_stream(_engine, name, session, extras=extras)
+    return _stream.open_stream(_engine, name, session, extras=extras, model_params=model_params)
 
 
 async def fork(
@@ -135,15 +141,17 @@ async def fork(
     at: int,
     extras: dict[str, Any] | None = None,
     agent_id: str = "default",
+    model_params: dict[str, Any] | None = None,
 ) -> AgentReply:
     """Rewind a persisted conversation to ``at`` and continue (regenerate/edit/explore).
 
     The backend passes its mutable session ``store`` (e.g. a
     :class:`~weave.adapters.driven.mutable_file_session.MutableFileSessionManager`).
-    Default Loom engine.
+    Default Loom engine. ``model_params`` — optional per-run model-params overlay.
     """
     return await _run.fork(
-        _engine, store, name, input, session, at=at, extras=extras, agent_id=agent_id
+        _engine, store, name, input, session, at=at, extras=extras, agent_id=agent_id,
+        model_params=model_params,
     )
 
 
@@ -155,9 +163,12 @@ async def fork_stateless(
     *,
     at: int | None = None,
     extras: dict[str, Any] | None = None,
+    model_params: dict[str, Any] | None = None,
 ) -> tuple[AgentReply, list[Any]]:
     """Stateless fork: caller owns the transcript; returns ``(reply, new_transcript)``."""
-    return await _run.fork_stateless(_engine, name, history, input, session, at=at, extras=extras)
+    return await _run.fork_stateless(
+        _engine, name, history, input, session, at=at, extras=extras, model_params=model_params
+    )
 
 
 def catalog() -> list[TargetInfo]:
@@ -172,9 +183,12 @@ async def run(
     *,
     kind: str | None = None,
     extras: dict[str, Any] | None = None,
+    model_params: dict[str, Any] | None = None,
 ) -> AgentReply | WorkflowReply:
     """Run ``name`` one-shot, dispatching by kind (default Loom engine)."""
-    return await _run.run(_engine, name, input, session, kind=kind, extras=extras)
+    return await _run.run(
+        _engine, name, input, session, kind=kind, extras=extras, model_params=model_params
+    )
 
 
 def chat_channel(
@@ -286,9 +300,10 @@ def run_workflow_sync(
     session: LoomSession,
     *,
     extras: dict[str, Any] | None = None,
+    model_params: dict[str, Any] | None = None,
 ) -> WorkflowReply:
     """Synchronous :func:`run_workflow` — for a caller without an event loop (Lambda)."""
-    return _block_on(run_workflow(name, input, session, extras=extras))
+    return _block_on(run_workflow(name, input, session, extras=extras, model_params=model_params))
 
 
 def run_sync(
@@ -298,9 +313,10 @@ def run_sync(
     *,
     kind: str | None = None,
     extras: dict[str, Any] | None = None,
+    model_params: dict[str, Any] | None = None,
 ) -> AgentReply | WorkflowReply:
     """Synchronous :func:`run` — one-shot dispatch by kind for a sync caller (Lambda)."""
-    return _block_on(run(name, input, session, kind=kind, extras=extras))
+    return _block_on(run(name, input, session, kind=kind, extras=extras, model_params=model_params))
 
 
 def fork_sync(
@@ -312,9 +328,12 @@ def fork_sync(
     at: int,
     extras: dict[str, Any] | None = None,
     agent_id: str = "default",
+    model_params: dict[str, Any] | None = None,
 ) -> AgentReply:
     """Synchronous :func:`fork` — for a caller without an event loop (Lambda)."""
-    return _block_on(fork(store, name, input, session, at=at, extras=extras, agent_id=agent_id))
+    return _block_on(
+        fork(store, name, input, session, at=at, extras=extras, agent_id=agent_id, model_params=model_params)
+    )
 
 
 def fork_stateless_sync(
@@ -325,6 +344,9 @@ def fork_stateless_sync(
     *,
     at: int | None = None,
     extras: dict[str, Any] | None = None,
+    model_params: dict[str, Any] | None = None,
 ) -> tuple[AgentReply, list[Any]]:
     """Synchronous :func:`fork_stateless` — for a caller without an event loop (Lambda)."""
-    return _block_on(fork_stateless(name, history, input, session, at=at, extras=extras))
+    return _block_on(
+        fork_stateless(name, history, input, session, at=at, extras=extras, model_params=model_params)
+    )

@@ -116,11 +116,13 @@ def open_stream(
     session: Any,
     *,
     extras: dict[str, Any] | None = None,
+    model_params: dict[str, Any] | None = None,
 ) -> BidiStream:
     """Build the bidi target ``name`` and return a :class:`BidiStream` async-CM over it.
 
     Building is synchronous; the connection opens on ``async with``. ``extras`` flow
-    to the model as ``invocation_state`` when the connection starts.
+    to the model as ``invocation_state`` when the connection starts. ``model_params``
+    is the per-run model-params overlay (e.g. a Bedrock ``boto_session``).
     """
-    agent = engine.build_agent(name, session)
+    agent = engine.build_agent(name, session, model_params=model_params)
     return BidiStream(agent, extras=extras)
