@@ -62,7 +62,7 @@ class _Engine:
     def discover(self) -> list[TargetInfo]:
         return self._targets
 
-    def build_agent(self, name: str, session: LoomSession):
+    def build_agent(self, name: str, session: LoomSession, *, model_params=None):
         return _Agent()
 
     def build_workflow(self, name: str, session: LoomSession):

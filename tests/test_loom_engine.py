@@ -36,6 +36,23 @@ def test_threads_injected_source_to_build_agent():
     assert kwargs["source"] is source
 
 
+def test_threads_model_params_to_build_agent():
+    engine = LoomAgentEngine()
+    overlay = {"boto_session": object()}
+    with patch("loom.build_agent") as build_agent:
+        engine.build_agent("assistant", _session(), model_params=overlay)
+    _, kwargs = build_agent.call_args
+    assert kwargs["model_params"] is overlay
+
+
+def test_defaults_model_params_to_none_on_build_agent():
+    engine = LoomAgentEngine()
+    with patch("loom.build_agent") as build_agent:
+        engine.build_agent("assistant", _session())
+    _, kwargs = build_agent.call_args
+    assert kwargs["model_params"] is None
+
+
 def test_threads_injected_source_to_build_workflow():
     source = object()
     engine = LoomAgentEngine(source=source)

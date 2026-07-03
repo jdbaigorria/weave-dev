@@ -40,6 +40,7 @@ async def run_agent(
     session: LoomSession,
     *,
     extras: dict[str, Any] | None = None,
+    model_params: dict[str, Any] | None = None,
 ) -> AgentReply:
     """Build agent ``name``, run one turn, and return a shaped :class:`AgentReply`.
 
@@ -53,9 +54,12 @@ async def run_agent(
         input: The input Strands expects — a string or a list of content blocks.
         session: Identity (``session_id`` / ``user_id``) for this run.
         extras: Free-form context forwarded as native ``invocation_state``.
+        model_params: Optional per-run overlay of model constructor params (merged on
+            top of the declarative config). The build-time channel for per-run secrets
+            — e.g. a Bedrock ``boto_session`` carrying per-client credentials.
     """
     logger.debug("building agent %r (session=%s)", name, session.session_id)
-    agent = engine.build_agent(name, session)
+    agent = engine.build_agent(name, session, model_params=model_params)
     try:
         result = await agent.invoke_async(input, invocation_state=extras or {})
     except Exception as exc:  # noqa: BLE001 — re-raised as a typed harness error
@@ -75,6 +79,7 @@ async def stream_agent(
     session: LoomSession,
     *,
     extras: dict[str, Any] | None = None,
+    model_params: dict[str, Any] | None = None,
 ) -> AsyncIterator[ChatStreamEvent]:
     """Build agent ``name`` and stream one turn as :class:`ChatStreamEvent`s.
 
@@ -90,7 +95,7 @@ async def stream_agent(
     each event's ``raw``.
     """
     logger.debug("building agent %r to stream (session=%s)", name, session.session_id)
-    agent = engine.build_agent(name, session)
+    agent = engine.build_agent(name, session, model_params=model_params)
     try:
         async for event in agent.stream_async(input, invocation_state=extras or {}):
             if not isinstance(event, dict):
