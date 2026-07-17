@@ -1,6 +1,6 @@
 [project]
 name = "weave"
-version = "0.0.5"
+version = "0.0.6"
 description = "Conversation runtime/harness for Loom-built agents (branching, sessions, channels)."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -8,7 +8,7 @@ requires-python = ">=3.11"
 # uses it through its public API only. The dependency is unidirectional — Loom
 # never imports Weave, and stays installable on its own.
 dependencies = [
-    "loom-declarative @ git+https://github.com/jdbaigorria/loom-dev@v1.0.0rc2",
+    "loom-declarative @ git+https://github.com/jdbaigorria/loom-dev@v1.0.0rc3",
 ]
 
 [project.urls]
