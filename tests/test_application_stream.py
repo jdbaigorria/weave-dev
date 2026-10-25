@@ -3,19 +3,42 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
 from loom import LoomSession
+from strands.bidi.types import (
+    AudioDelta,
+    BidiAudioDeltaEvent,
+    BidiBargeInEvent,
+    BidiReasoningDeltaEvent,
+    BidiTextBlockEvent,
+    BidiTextDeltaEvent,
+    BidiToolUseBlocksEvent,
+    BidiTranscriptBlockEvent,
+    BidiTranscriptDeltaEvent,
+)
 
+from weave.application.errors import HarnessError
 from weave.application.stream import BidiStream, StreamEvent, _project, open_stream
+
+
+class _FakeBidiModel:
+    """Exposes the resolved audio config the way a Strands bidi model does."""
+
+    def get_audio_config(self) -> dict[str, Any]:
+        stream = {"sample_rate": 16000, "channels": 1, "format": "pcm"}
+        return {"input": stream, "output": stream}
 
 
 class _FakeBidiAgent:
     """A BidiAgent stand-in recording lifecycle + sends, yielding scripted events."""
 
-    def __init__(self, events: list[Any] | None = None) -> None:
+    def __init__(self, events: list[Any] | None = None, model: Any = None) -> None:
         self._events = events or []
+        self.model = model
         self.started_with: Any = "UNSET"
         self.stopped = False
         self.cleaned_up = False
@@ -50,30 +73,58 @@ def _session() -> LoomSession:
     return LoomSession(session_id="s-1", user_id="u-1")
 
 
-# --- projection (duck-typed) ---------------------------------------------------
+# --- projection (real Strands bidi events) ---------------------------------------
 
 
-def test_project_audio_event():
-    ev = SimpleNamespace(audio="b64", sample_rate=16000, channels=1, format="pcm")
+def test_project_audio_delta_event():
+    ev = BidiAudioDeltaEvent(
+        audio="b64", format="pcm", sample_rate=16000, channels=1, content_id="c-1"
+    )
     out = _project(ev)
     assert out.type == "audio" and out.audio == "b64" and out.raw is ev
 
 
-def test_project_transcript_event():
-    ev = SimpleNamespace(text="hello", is_final=True, role="assistant")
+@pytest.mark.parametrize(
+    "ev",
+    [
+        BidiTextDeltaEvent(delta="hello", content_id="c-1"),
+        BidiTranscriptDeltaEvent(delta="hello", role="user", content_id="c-1"),
+    ],
+)
+def test_project_text_and_transcript_deltas_are_text(ev):
     out = _project(ev)
     assert out.type == "text" and out.text == "hello"
 
 
-def test_project_tool_use_event():
-    ev = type("ToolUseStreamEvent", (), {})()
-    assert _project(ev).type == "tool_call"
-
-
-def test_project_interruption_is_control():
-    ev = SimpleNamespace(reason="user_speech")  # barge-in
+@pytest.mark.parametrize(
+    "ev",
+    [
+        # Completed blocks repeat the deltas; projecting them as text would duplicate it.
+        BidiTextBlockEvent(text="hello", content_id="c-1"),
+        BidiTranscriptBlockEvent(transcript="hello", role="assistant", content_id="c-1"),
+        BidiReasoningDeltaEvent(delta="thinking", content_id="c-1"),
+    ],
+)
+def test_project_blocks_and_reasoning_are_control(ev):
     out = _project(ev)
     assert out.type == "control" and out.control is ev
+
+
+def test_project_tool_use_blocks_event():
+    ev = BidiToolUseBlocksEvent(tool_uses=[{"toolUseId": "t-1", "name": "lookup", "input": {}}])
+    out = _project(ev)
+    assert out.type == "tool_call" and out.tool_call is ev
+
+
+def test_project_barge_in_is_control():
+    ev = BidiBargeInEvent()
+    out = _project(ev)
+    assert out.type == "control" and out.control is ev
+
+
+def test_project_non_dict_event_is_control():
+    ev = SimpleNamespace(reason="unknown")
+    assert _project(ev).type == "control"
 
 
 # --- BidiStream lifecycle ------------------------------------------------------
@@ -127,11 +178,60 @@ def test_send_text_passes_string_through():
     assert agent.sent == ["hi there"]
 
 
+def _send_audio(agent: _FakeBidiAgent, audio: bytes | str, **kwargs: Any) -> None:
+    async def scenario():
+        async with open_stream(_FakeEngine(agent), "voice", _session()) as stream:
+            await stream.send_audio(audio, **kwargs)
+
+    asyncio.run(scenario())
+
+
+def test_send_audio_sends_raw_bytes_as_audio_delta():
+    agent = _FakeBidiAgent(model=_FakeBidiModel())
+    _send_audio(agent, b"\x00\x01", format="pcm")
+    assert agent.sent == [AudioDelta(format="pcm", source={"bytes": b"\x00\x01"})]
+
+
+def test_send_audio_decodes_base64_strings():
+    agent = _FakeBidiAgent(model=_FakeBidiModel())
+    _send_audio(agent, base64.b64encode(b"\x00\x01").decode())
+    assert agent.sent == [AudioDelta(format="pcm", source={"bytes": b"\x00\x01"})]
+
+
+def test_send_audio_rejects_a_str_that_is_not_base64():
+    agent = _FakeBidiAgent(model=_FakeBidiModel())
+    with pytest.raises(HarnessError, match="not base64"):
+        _send_audio(agent, "not base64!")
+    assert agent.sent == []
+
+
+def test_send_audio_accepts_format_matching_the_model_input_stream():
+    agent = _FakeBidiAgent(model=_FakeBidiModel())
+    _send_audio(agent, b"\x00", sample_rate=16000, channels=1)
+    assert len(agent.sent) == 1
+
+
+@pytest.mark.parametrize("declared", [{"sample_rate": 24000}, {"channels": 2}])
+def test_send_audio_rejects_format_not_matching_the_model_input_stream(declared):
+    agent = _FakeBidiAgent(model=_FakeBidiModel())
+    with pytest.raises(HarnessError, match="does not match"):
+        _send_audio(agent, b"\x00", **declared)
+    assert agent.sent == []
+
+
+def test_send_audio_skips_the_check_when_the_model_has_no_audio_config():
+    agent = _FakeBidiAgent(model=None)
+    _send_audio(agent, b"\x00", sample_rate=48000, channels=2)
+    assert len(agent.sent) == 1
+
+
 def test_receive_yields_projected_events():
     events = [
-        SimpleNamespace(text="hi", is_final=False, role="assistant"),
-        SimpleNamespace(audio="b64", sample_rate=24000, channels=1, format="pcm"),
-        SimpleNamespace(reason="user_speech"),
+        BidiTranscriptDeltaEvent(delta="hi", role="assistant", content_id="c-1"),
+        BidiAudioDeltaEvent(
+            audio="b64", format="pcm", sample_rate=24000, channels=1, content_id="c-2"
+        ),
+        BidiBargeInEvent(),
     ]
     agent = _FakeBidiAgent(events)
 

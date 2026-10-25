@@ -220,9 +220,9 @@ async with open_stream("voice", session) as stream:
 ```python
 async with open_stream("voice", session) as stream:
     await stream.send_audio(
-        audio_chunk_base64,
+        audio_chunk,  # raw bytes, or a base64 str
         format="pcm",
-        sample_rate=16000,
+        sample_rate=16000,  # optional: checked against the model's input stream
         channels=1,
     )
 ```

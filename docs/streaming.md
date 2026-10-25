@@ -94,13 +94,16 @@ async with open_stream("voice", session) as stream:
 ```
 
 - `__aenter__` opens the connection; `__aexit__` stops it and runs `agent.cleanup()`.
-- `send_audio(chunk, format=..., sample_rate=..., channels=...)` speaks the
-  **model's** format — transcoding (e.g. μ-law 8k ↔ PCM 16k) is the **channel
-  adapter's** job, not the stream's.
-- Supported `send_audio` values are `format="pcm" | "wav" | "opus" | "mp3"`,
-  `sample_rate=16000 | 24000 | 48000`, and `channels=1 | 2`.
-- `StreamEvent.type` is `text | audio | tool_call | control`; **barge-in** arrives as a
-  `control` event.
+- `send_audio(chunk, format=...)` speaks the **model's** format — transcoding
+  (e.g. μ-law 8k ↔ PCM 16k) is the **channel adapter's** job, not the stream's.
+  `chunk` is raw `bytes` or a base64 `str`; `format` is `"pcm" | "wav" | "opus" | "mp3"`.
+- The input sample rate and channel count are set on the bidi **model**, not per
+  chunk. `send_audio(..., sample_rate=..., channels=...)` only checks that the chunk
+  matches the model's input stream, and raises `HarnessError` if it doesn't.
+- `StreamEvent.type` is `text | audio | tool_call | control`. `text` carries each
+  incremental delta of the model's text and of the user/assistant speech transcript
+  (the speaker is in `event.raw["role"]`). The completed text/transcript blocks,
+  reasoning, lifecycle, usage and **barge-in** arrive as `control` events.
 
 !!! note "Transport plumbing is a channel adapter"
     `open_stream` is the transport-agnostic half. A WebSocket pump and a telephony

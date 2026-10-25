@@ -9,6 +9,10 @@ requires-python = ">=3.11"
 # never imports Weave, and stays installable on its own.
 dependencies = [
     "loom-declarative @ git+https://github.com/jdbaigorria/loom-dev@v1.0.0rc3",
+    # Weave also imports Strands directly (bidi audio input, the file session
+    # manager, content types), so it declares the floor its code needs instead of
+    # inheriting whatever the loom-declarative pin allows. Matches Loom's range.
+    "strands-agents>=1.62.0,<2.0",
 ]
 
 [project.urls]
