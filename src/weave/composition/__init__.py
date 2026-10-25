@@ -80,7 +80,9 @@ async def run_agent(
     channel for injecting per-run secrets (e.g. a Bedrock ``boto_session``) without
     persisting them in the config source.
     """
-    return await _run.run_agent(_engine, name, input, session, extras=extras, model_params=model_params)
+    return await _run.run_agent(
+        _engine, name, input, session, extras=extras, model_params=model_params
+    )
 
 
 def stream_agent(
@@ -99,7 +101,9 @@ def stream_agent(
     ``model_params`` — optional per-run overlay of model constructor params (see
     :func:`run_agent`).
     """
-    return _run.stream_agent(_engine, name, input, session, extras=extras, model_params=model_params)
+    return _run.stream_agent(
+        _engine, name, input, session, extras=extras, model_params=model_params
+    )
 
 
 async def run_workflow(
@@ -114,7 +118,9 @@ async def run_workflow(
 
     ``model_params`` — optional per-run overlay applied to every node's model.
     """
-    return await _run.run_workflow(_engine, name, input, session, extras=extras, model_params=model_params)
+    return await _run.run_workflow(
+        _engine, name, input, session, extras=extras, model_params=model_params
+    )
 
 
 def open_stream(
@@ -150,7 +156,14 @@ async def fork(
     Default Loom engine. ``model_params`` — optional per-run model-params overlay.
     """
     return await _run.fork(
-        _engine, store, name, input, session, at=at, extras=extras, agent_id=agent_id,
+        _engine,
+        store,
+        name,
+        input,
+        session,
+        at=at,
+        extras=extras,
+        agent_id=agent_id,
         model_params=model_params,
     )
 
@@ -332,7 +345,16 @@ def fork_sync(
 ) -> AgentReply:
     """Synchronous :func:`fork` — for a caller without an event loop (Lambda)."""
     return _block_on(
-        fork(store, name, input, session, at=at, extras=extras, agent_id=agent_id, model_params=model_params)
+        fork(
+            store,
+            name,
+            input,
+            session,
+            at=at,
+            extras=extras,
+            agent_id=agent_id,
+            model_params=model_params,
+        )
     )
 
 
@@ -348,5 +370,7 @@ def fork_stateless_sync(
 ) -> tuple[AgentReply, list[Any]]:
     """Synchronous :func:`fork_stateless` — for a caller without an event loop (Lambda)."""
     return _block_on(
-        fork_stateless(name, history, input, session, at=at, extras=extras, model_params=model_params)
+        fork_stateless(
+            name, history, input, session, at=at, extras=extras, model_params=model_params
+        )
     )

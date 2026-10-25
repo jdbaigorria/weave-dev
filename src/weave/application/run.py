@@ -275,9 +275,13 @@ async def run(
         "dispatching target %r as kind=%s (session=%s)", name, resolved, session.session_id
     )
     if resolved == "agent":
-        return await run_agent(engine, name, input, session, extras=extras, model_params=model_params)
+        return await run_agent(
+            engine, name, input, session, extras=extras, model_params=model_params
+        )
     if resolved == "workflow":
-        return await run_workflow(engine, name, input, session, extras=extras, model_params=model_params)
+        return await run_workflow(
+            engine, name, input, session, extras=extras, model_params=model_params
+        )
     if resolved == "bidi":
         raise HarnessError(f"'{name}' is a bidi (full-duplex) target — use open_stream, not run.")
     raise HarnessError(f"unknown kind '{resolved}' for target '{name}'.")
