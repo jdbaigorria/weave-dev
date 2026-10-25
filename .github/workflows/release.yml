@@ -47,13 +47,14 @@ jobs:
         run: uv build
 
       - name: Smoke-test the wheel
-        # Refuses to release a wheel that can't even be imported.
+        # Refuses to release a wheel that can't even be imported. The wheel brings
+        # its own loom-declarative git+https pin; adding a second URL for it (e.g.
+        # the ../loom-dev checkout) makes uv reject the install as conflicting.
         working-directory: weave-dev
         run: |
           uv venv /tmp/weave-smoke
           uv pip install --python /tmp/weave-smoke/bin/python \
-            "$(echo dist/*.whl)[fastapi,aws]" \
-            "loom-declarative @ ../loom-dev"
+            "$(echo dist/*.whl)[fastapi,aws]"
           /tmp/weave-smoke/bin/python -c "import weave" \
             || { echo "::error::release wheel is broken: 'import weave' failed"; exit 1; }
 
