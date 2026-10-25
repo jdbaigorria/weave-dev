@@ -92,7 +92,9 @@ def test_fork_truncates_at_and_returns_new_transcript():
 def test_fork_stateless_forwards_model_params_to_build_agent():
     engine = _FakeEngine(_FakeAgent(_result("x")))
     overlay = {"boto_session": object()}
-    asyncio.run(fork_stateless(engine, "assistant", _HISTORY, "q2", _session(), at=2, model_params=overlay))
+    asyncio.run(
+        fork_stateless(engine, "assistant", _HISTORY, "q2", _session(), at=2, model_params=overlay)
+    )
     assert engine.built_with["model_params"] is overlay
 
 
