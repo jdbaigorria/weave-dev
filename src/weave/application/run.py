@@ -69,7 +69,7 @@ async def run_agent(
         logger.debug("tore down agent %r (session=%s)", name, session.session_id)
 
     logger.debug("agent %r completed turn (session=%s)", name, session.session_id)
-    return agent_reply_from_result(result, session.session_id)
+    return agent_reply_from_result(result, session, target=name)
 
 
 async def stream_agent(
@@ -105,7 +105,7 @@ async def stream_agent(
             if "result" in event:
                 yield ChatStreamEvent(
                     type="done",
-                    reply=agent_reply_from_result(event["result"], session.session_id),
+                    reply=agent_reply_from_result(event["result"], session, target=name),
                     raw=event,
                 )
     except Exception as exc:  # noqa: BLE001 — re-raised as a typed harness error
@@ -148,7 +148,7 @@ async def run_workflow(
         )
 
     logger.debug("workflow %r completed turn (session=%s)", name, session.session_id)
-    return workflow_reply_from_result(result, session.session_id)
+    return workflow_reply_from_result(result, session, target=name)
 
 
 async def fork(
@@ -206,7 +206,7 @@ async def fork(
     finally:
         agent.cleanup()
 
-    return agent_reply_from_result(result, session.session_id)
+    return agent_reply_from_result(result, session, target=name)
 
 
 async def fork_stateless(
@@ -235,7 +235,7 @@ async def fork_stateless(
     finally:
         agent.cleanup()
 
-    return agent_reply_from_result(result, session.session_id), list(agent.messages)
+    return agent_reply_from_result(result, session, target=name), list(agent.messages)
 
 
 def catalog(engine: AgentEngine) -> list[TargetInfo]:

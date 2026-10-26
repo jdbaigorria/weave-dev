@@ -10,7 +10,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator, Awaitable
+from collections.abc import AsyncIterator, Awaitable, Mapping
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, TypeVar
 
 from loom import LoomSession, TargetInfo
@@ -189,6 +190,21 @@ def catalog() -> list[TargetInfo]:
     return _run.catalog(_engine)
 
 
+def labels_of(name: str) -> Mapping[str, Any]:
+    """Return the catalog labels of target ``name`` (default Loom engine).
+
+    The labels are the product-owned metadata declared on the agent/workflow (Loom
+    carries them, never interprets them). An unknown target, or one without labels,
+    gives an empty mapping — so a per-agent policy reads as
+    ``labels_of(reply.target).get("expose_metrics", False)``.
+    """
+    for target in catalog():
+        if target.name == name:
+            labels: Mapping[str, Any] = target.labels
+            return labels
+    return MappingProxyType({})
+
+
 async def run(
     name: str,
     input: Any,
@@ -288,6 +304,13 @@ def _block_on(coro: Awaitable[_T]) -> _T:
     try:
         asyncio.get_running_loop()
     except RuntimeError:
+        in_loop = False
+    else:
+        in_loop = True
+    if not in_loop:
+        # Outside the ``except``: an exception re-raised from inside a handler gets its
+        # ``__context__`` overwritten with the handled RuntimeError, which would hide the
+        # real cause chain from callers that walk it (e.g. lambda_handler ``errors``).
         return asyncio.run(coro)  # type: ignore[arg-type]
     raise HarnessError(
         "a *_sync wrapper was called from within a running event loop; await the "

@@ -47,9 +47,66 @@ handler = lambda_handler(routed_channel(by_key(
 See [Routing to multiple agents](chat-channel.md#routing-to-multiple-agents) for
 `by_key`/`by_rules` and the single-vs-multi model.
 
-### Translate the event yourself
+### Your own HTTP contract: `parse` / `render` / `errors` / `headers`
 
-If you need full control of parsing or the response shape, drive it with the
+A product whose API already has its own shape doesn't rewrite the handler — it plugs
+into four optional, keyword-only seams of `lambda_handler`:
+
+```python
+from weave import (
+    routed_channel, by_key, mint_if_absent, lambda_handler,
+    ChatRequest, decode_body, header,
+)
+
+def parse(event) -> ChatRequest:
+    body = decode_body(event)                       # base64 + JSON, {} if no body
+    return ChatRequest(
+        message=body["input"],                      # your field names
+        session_id=body.get("conversation"),
+        extras={"tenant": header(event, "X-Tenant")},   # case-insensitive (REST v1 / HTTP API v2)
+    )
+
+def render(reply, request):                         # → body; status is always 200
+    return {"answer": reply.text, "agent": reply.target, "user": reply.user_id,
+            "anonymous": reply.is_anonymous}
+
+def overflow(exc, request):                         # → (status, body)
+    return 413, {"error": "conversation_too_long"}
+
+handler = lambda_handler(
+    routed_channel(
+        by_key(lambda r: r.extras["tenant"], ROUTES, default="support_agent"),
+        session_policy=mint_if_absent(anon_prefix="anon_"),
+    ),
+    parse=parse,
+    render=render,
+    errors={ContextWindowOverflowException: overflow},
+    headers={"Access-Control-Allow-Origin": "*"},   # on every response, errors included
+)
+```
+
+- **`parse(event) -> ChatRequest`** — default `ChatRequest(**decode_body(event))`. Reject
+  with `ValueError` or `RequestError` → 400. A malformed or invalid-base64 body is a 400
+  too, never an uncaught exception.
+- **`render(reply, request)`** — a `str` is the body as-is, a pydantic model goes through
+  `model_dump_json()`, anything else through `json.dumps`. Default: the reply's JSON.
+  Per-agent policy keys off `reply.target` (or its labels, via `labels_of`).
+- **`errors={ExcType: mapper}`** — `mapper(exc, request) -> (status, body)`, with
+  `request=None` if the failure came while parsing. Your mappings run **before** Weave's
+  (so you can replace the 502 for `HarnessError`), are tried in **insertion order** like
+  `except` clauses, and match if the raised exception **or any of its `__cause__` /
+  `__context__` chain** is an instance. That last part is what makes the context
+  overflow work: the turn raises `HarnessError` *from* the Strands exception. A mapper
+  that raises answers 500.
+- **`headers`** — added to `Content-Type: application/json` on every response; a
+  same-named header replaces the default. CORS preflight (`OPTIONS`) is API Gateway's job.
+
+Default status mapping (after your `errors`): `RequestError`/invalid body → 400,
+`RoutingError` → 404, `HarnessError`/`LoomError` → 502, anything else → 500.
+
+### Translate the event yourself (last resort)
+
+If even that is too constraining, drive the run directly with the
 [`*_sync` wrappers](harness.md#synchronous-callers-lambda) instead of `asyncio.run`:
 
 ```python

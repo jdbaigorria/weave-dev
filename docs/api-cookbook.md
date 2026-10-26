@@ -436,6 +436,26 @@ resolve = by_rules(
 )
 ```
 
+### `by_label`
+
+```python
+from weave import by_label
+
+resolve = by_label(
+    "departments",                                  # label declared on each agent's YAML
+    key=lambda req: (req.extras or {}).get("department"),
+    default="support_agent",
+)
+```
+
+### `labels_of`
+
+```python
+from weave import labels_of
+
+labels_of(reply.target).get("expose_metrics", False)   # {} if no labels / unknown target
+```
+
 ### `TargetResolver`
 
 ```python

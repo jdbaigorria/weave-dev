@@ -52,10 +52,23 @@ minting mechanism — you inject the policy (same shape as routing):
   `RequestError` → **HTTP 400**. A runtime library shouldn't silently mint a session and
   turn a client's "I forgot to persist my `session_id`" bug into a brand-new conversation
   every turn.
-- **`mint_if_absent(anon_prefix="anon_")`** — generate a `session_id` when absent (and an
-  anonymous `user_id`, optionally prefixed). The effective id is returned on the
-  `AgentReply`, so the caller echoes it on the next turn. For a public, gateway-less
-  frontend.
+- **`mint_if_absent(anon_prefix="anon_")`** — generate a `session_id` when absent. An
+  anonymous visitor is identified **by its session**: `user_id = anon_prefix + session_id`,
+  stable across turns without the caller returning anything. The effective ids come back
+  on the `AgentReply` (`session_id`, `user_id`, `is_anonymous`), so the caller echoes the
+  `session_id` on the next turn. A `user_id` that starts with a non-empty `anon_prefix`
+  (the id handed back from the previous reply) keeps the turn anonymous; any other
+  `user_id` identifies the user. For a public, gateway-less frontend.
+
+  | Request | effective `user_id` | `is_anonymous` |
+  | --- | --- | --- |
+  | no `session_id`, no `user_id` | `anon_<new session id>` | `True` |
+  | `session_id=s1` | `anon_s1` | `True` |
+  | `session_id=s1`, `user_id=anon_s1` | `anon_s1` | `True` |
+  | `session_id=s1`, `user_id=u-7` | `u-7` | `False` |
+
+  Without an `anon_prefix` a returned anonymous id can't be told apart, so a present
+  `user_id` is always identified.
 
 ```python
 from weave import chat_channel, mint_if_absent
@@ -121,12 +134,21 @@ A backend with its own response contract (it maps the reply to its own DTO, in a
 handler) can route + dispatch in one blocking call with `channel.handle_sync(request)` —
 no `asyncio.run` by hand; routing/execution errors surface as `RoutingError`/`HarnessError`.
 
-A *resolver* is any `(ChatRequest) -> str`. Two are shipped:
+A *resolver* is any `(ChatRequest) -> str`. Three are shipped:
 
 - **`by_key(key_of, routes, *, default=None)`** — deterministic table lookup (key-based;
   also identity-based, when the key is a JWT claim).
 - **`by_rules([(predicate, target), …], *, default=None)`** — first matching predicate
   wins (compound, ordered conditions).
+- **`by_label(label, *, key, default=None)`** — like `by_key`, but the table is the
+  targets' own catalog labels (declared in each agent's YAML), so adding an agent doesn't
+  mean editing a dict in your code. A label value is a string or a list
+  (`departments: [SALES, SUPPORT]`). The index is built on the first request and cached;
+  two targets declaring the same value raise `HarnessError` (a config error).
+
+The reply says which target ran (`reply.target`) and as whom (`reply.user_id`,
+`reply.is_anonymous`), so you never re-resolve the route outside the channel. To apply a
+per-agent policy from the same labels, read them with `labels_of(reply.target)`.
 
 A request that maps to no target raises `RoutingError` → **HTTP 404** (vs an execution
 failure's 502). Pass `default=` for a catch-all instead.

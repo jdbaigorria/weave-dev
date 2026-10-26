@@ -27,6 +27,7 @@ def _result(status: str = "COMPLETED", nodes: dict | None = None) -> SimpleNames
         results=nodes,
         accumulated_usage={"inputTokens": 30, "outputTokens": 12, "totalTokens": 42},
         accumulated_metrics={"latencyMs": 200},
+        execution_time=2300,
         interrupts=[],
     )
 
@@ -76,7 +77,8 @@ def test_run_workflow_projects_reply():
     assert reply.text == "done"  # terminal (last) node text
     assert reply.status == "COMPLETED"
     assert reply.usage.total_tokens == 42
-    assert reply.usage.latency_ms == 200.0
+    assert reply.usage.latency_ms == 2300.0
+    assert reply.usage.model_latency_ms == 200.0
     assert reply.execution_order == ["triage", "billing"]
     assert reply.session_id == "s-1"
 

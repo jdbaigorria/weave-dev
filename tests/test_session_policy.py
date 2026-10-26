@@ -12,6 +12,7 @@ import asyncio
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from loom import LoomSession
 
 from weave.adapters.driving.chat import ChatChannel, ChatRequest, chat_router
 from weave.adapters.driving.identity import mint_if_absent, require
@@ -86,6 +87,40 @@ def test_mint_keeps_identified_user():
     session = runner.calls[0]["session"]
     assert session.user_id == "u-1"
     assert session.is_anonymous is False
+
+
+def _mint_session(policy, **fields) -> LoomSession:
+    return policy(ChatRequest(message="hi", **fields))
+
+
+def test_mint_anonymous_is_keyed_by_session_and_stable_across_turns():
+    policy = mint_if_absent(anon_prefix="anon_")
+
+    first = _mint_session(policy)  # no ids: a new session, anonymous
+    assert (first.user_id, first.is_anonymous) == (f"anon_{first.session_id}", True)
+
+    again = _mint_session(policy, session_id=first.session_id)  # caller echoes only session
+    assert (again.user_id, again.is_anonymous) == (first.user_id, True)
+
+
+def test_mint_anonymous_id_handed_back_stays_anonymous():
+    policy = mint_if_absent(anon_prefix="anon_")
+
+    session = _mint_session(policy, session_id="s1", user_id="anon_s1")
+
+    assert (session.user_id, session.is_anonymous) == ("anon_s1", True)
+
+
+def test_mint_identified_user_is_not_anonymous():
+    session = _mint_session(mint_if_absent(anon_prefix="anon_"), session_id="s1", user_id="u-7")
+
+    assert (session.user_id, session.is_anonymous) == ("u-7", False)
+
+
+def test_mint_without_prefix_always_identifies_a_present_user_id():
+    session = _mint_session(mint_if_absent(), session_id="s1", user_id="s1")
+
+    assert (session.user_id, session.is_anonymous) == ("s1", False)
 
 
 # --- HTTP status mapping --------------------------------------------------------

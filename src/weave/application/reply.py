@@ -11,18 +11,27 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
+from loom import LoomSession
 from pydantic import BaseModel, ConfigDict, Field
 
 from weave.domain.conversation import Interrupt
 
 
 class Usage(BaseModel):
-    """Slim token/latency/tool projection of ``result.metrics.get_summary()``."""
+    """Slim token/latency/tool projection of ``result.metrics.get_summary()``.
+
+    ``latency_ms`` is always the wall-clock time of the turn, in **milliseconds**, for
+    agents and workflows alike. ``model_latency_ms`` is the summed model latency (what
+    Strands reports as ``accumulated_metrics["latencyMs"]``), also in milliseconds — it
+    excludes tool time and orchestration, so it is never larger than ``latency_ms`` for
+    a sequential turn.
+    """
 
     input_tokens: int = 0
     output_tokens: int = 0
     total_tokens: int = 0
     latency_ms: float = 0.0
+    model_latency_ms: float = 0.0
     tool_calls: list[str] = Field(default_factory=list)
 
 
@@ -36,6 +45,12 @@ class AgentReply(BaseModel):
     ``output`` are the easy ones to drop, and the loss stays invisible until an agent
     actually pauses or returns structured output. See the "Wrapping AgentReply" guide
     in ``docs/harness.md``.
+
+    ``target``, ``user_id`` and ``is_anonymous`` say *which* agent ran and *as whom*
+    (the effective :class:`~loom.LoomSession` — a routing resolver or a minting session
+    policy may have decided them, so the caller cannot know them up front). Every reply
+    produced by a Weave use case carries them; they are ``None`` / ``False`` only on a
+    reply built by hand outside Weave (tests, doubles).
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -46,6 +61,9 @@ class AgentReply(BaseModel):
     interrupts: list[Interrupt] = Field(default_factory=list)
     usage: Usage
     session_id: str
+    target: str | None = None
+    user_id: str | None = None
+    is_anonymous: bool = False
     # The full native AgentResult — escape hatch to traces/everything; never serialized.
     raw: Any = Field(default=None, exclude=True, repr=False)
 
@@ -87,24 +105,34 @@ def _usage_of(result: Any) -> Usage:
     metrics = getattr(result, "metrics", None)
     summary = (metrics.get_summary() if metrics is not None else {}) or {}
     acc = summary.get("accumulated_usage", {}) or {}
+    model_metrics = summary.get("accumulated_metrics", {}) or {}
     return Usage(
         input_tokens=acc.get("inputTokens", 0),
         output_tokens=acc.get("outputTokens", 0),
         total_tokens=acc.get("totalTokens", 0),
-        latency_ms=summary.get("total_duration", 0.0),
+        # Strands reports ``total_duration`` (sum of cycle durations) in seconds.
+        latency_ms=float(summary.get("total_duration", 0.0) or 0.0) * 1000.0,
+        model_latency_ms=float(model_metrics.get("latencyMs", 0) or 0),
         tool_calls=list((summary.get("tool_usage", {}) or {}).keys()),
     )
 
 
-def agent_reply_from_result(result: Any, session_id: str) -> AgentReply:
-    """Project a native Strands ``AgentResult`` into an :class:`AgentReply`."""
+def agent_reply_from_result(result: Any, session: LoomSession, *, target: str) -> AgentReply:
+    """Project a native Strands ``AgentResult`` into an :class:`AgentReply`.
+
+    ``session`` and ``target`` are what the turn ran as and against; they fill the
+    reply's identity fields (``session_id``, ``user_id``, ``is_anonymous``, ``target``).
+    """
     return AgentReply(
         text=_text_of(result),
         output=getattr(result, "structured_output", None),
         stop_reason=getattr(result, "stop_reason", None),
         interrupts=_interrupts_of(result),
         usage=_usage_of(result),
-        session_id=session_id,
+        session_id=session.session_id,
+        target=target,
+        user_id=session.user_id,
+        is_anonymous=session.is_anonymous,
         raw=result,
     )
 
@@ -133,6 +161,7 @@ class WorkflowReply(BaseModel):
     ``status`` is prominent (COMPLETED / FAILED / INTERRUPTED): a workflow can
     finish without producing a terminal answer. ``execution_order`` is the node
     ids in the order they ran; per-node detail is reachable through ``raw``.
+    ``target`` / ``user_id`` / ``is_anonymous`` mirror :class:`AgentReply`.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -143,6 +172,9 @@ class WorkflowReply(BaseModel):
     execution_order: list[str] = Field(default_factory=list)
     interrupts: list[Interrupt] = Field(default_factory=list)
     session_id: str
+    target: str | None = None
+    user_id: str | None = None
+    is_anonymous: bool = False
     raw: Any = Field(default=None, exclude=True, repr=False)
 
 
@@ -187,11 +219,13 @@ def _workflow_usage_of(result: Any) -> Usage:
         input_tokens=_field(acc, "inputTokens", 0),
         output_tokens=_field(acc, "outputTokens", 0),
         total_tokens=_field(acc, "totalTokens", 0),
-        latency_ms=float(_field(metrics, "latencyMs", 0) or 0),
+        # ``execution_time`` is the workflow's wall-clock time, already in ms.
+        latency_ms=float(getattr(result, "execution_time", 0) or 0),
+        model_latency_ms=float(_field(metrics, "latencyMs", 0) or 0),
     )
 
 
-def workflow_reply_from_result(result: Any, session_id: str) -> WorkflowReply:
+def workflow_reply_from_result(result: Any, session: LoomSession, *, target: str) -> WorkflowReply:
     """Project a native Strands ``MultiAgentResult`` into a :class:`WorkflowReply`."""
     status = getattr(result, "status", None)
     status_str = getattr(status, "name", None) or str(status) if status is not None else "UNKNOWN"
@@ -201,6 +235,9 @@ def workflow_reply_from_result(result: Any, session_id: str) -> WorkflowReply:
         usage=_workflow_usage_of(result),
         execution_order=list((getattr(result, "results", None) or {}).keys()),
         interrupts=_interrupts_of(result),
-        session_id=session_id,
+        session_id=session.session_id,
+        target=target,
+        user_id=session.user_id,
+        is_anonymous=session.is_anonymous,
         raw=result,
     )

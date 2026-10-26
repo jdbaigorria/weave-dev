@@ -48,9 +48,19 @@ def mint_if_absent(*, anon_prefix: str = "") -> SessionPolicy:
     - No ``session_id`` → a fresh UUID (a new conversation). The effective id is always
       returned on the :class:`~weave.application.reply.AgentReply` (``session_id``), so
       the caller reads it from the response and echoes it on the next turn.
-    - No ``user_id`` → an anonymous user with a freshly minted id, prefixed with
-      ``anon_prefix`` (e.g. ``"anon_"``) so a backend can spot anonymous rows. With a
-      ``user_id`` present the turn is identified as usual.
+    - No ``user_id`` → an anonymous user identified by its session:
+      ``user_id = anon_prefix + session_id`` (e.g. ``"anon_"`` so a backend can spot
+      anonymous rows). It is **stable across turns** with no help from the caller, and
+      is the same rule the strict :func:`require` policy uses (``user_id = session_id``).
+    - A ``user_id`` that starts with a non-empty ``anon_prefix`` is an anonymous id
+      handed back by the caller (read off the previous reply): the turn stays
+      anonymous (``is_anonymous=True``) and that id is respected.
+    - Any other ``user_id`` identifies the user as usual. Without an ``anon_prefix`` a
+      returned anonymous id cannot be told apart, so a present ``user_id`` is always
+      identified.
+
+    The effective ``user_id`` / ``is_anonymous`` come back on the reply, so the caller
+    never has to generate identity outside the channel.
 
     For a public, gateway-less frontend that may not send ids on the first hit. Behind
     an authenticated gateway (ids always present) prefer the strict :func:`require`.
@@ -58,10 +68,12 @@ def mint_if_absent(*, anon_prefix: str = "") -> SessionPolicy:
 
     def policy(request: ChatRequest) -> LoomSession:
         session_id = request.session_id or _new_id()
-        if request.user_id is not None:
-            return LoomSession(user_id=request.user_id, session_id=session_id, is_anonymous=False)
-        return LoomSession(
-            user_id=f"{anon_prefix}{_new_id()}", session_id=session_id, is_anonymous=True
-        )
+        user_id = request.user_id
+        if user_id is None:
+            return LoomSession(
+                user_id=f"{anon_prefix}{session_id}", session_id=session_id, is_anonymous=True
+            )
+        is_anonymous = bool(anon_prefix) and user_id.startswith(anon_prefix)
+        return LoomSession(user_id=user_id, session_id=session_id, is_anonymous=is_anonymous)
 
     return policy

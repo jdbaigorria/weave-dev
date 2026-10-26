@@ -37,8 +37,8 @@ from weave.adapters.driving.chat import (
     chat_router,
 )
 from weave.adapters.driving.identity import mint_if_absent, require
-from weave.adapters.driving.lambda_handler import lambda_handler
-from weave.adapters.driving.routing import by_key, by_rules
+from weave.adapters.driving.lambda_handler import decode_body, header, lambda_handler
+from weave.adapters.driving.routing import by_key, by_label, by_rules
 from weave.application.content import (
     build_content,
     document_block,
@@ -59,6 +59,7 @@ from weave.composition import (
     fork_stateless,
     fork_stateless_sync,
     fork_sync,
+    labels_of,
     open_stream,
     routed_channel,
     run,
@@ -115,18 +116,22 @@ __all__ = [
     "asset_router",
     "build_content",
     "by_key",
+    "by_label",
     "by_rules",
     "catalog",
     "chat_channel",
     "chat_router",
     "configure",
+    "decode_body",
     "document_block",
     "file_block",
     "fork",
     "fork_stateless",
     "fork_stateless_sync",
     "fork_sync",
+    "header",
     "image_block",
+    "labels_of",
     "lambda_handler",
     "list_conversations",
     "mint_if_absent",

@@ -7,10 +7,11 @@ import json
 from typing import Any
 
 import pytest
+from loom import TargetInfo
 
 from weave.adapters.driving.chat import ChatChannel, ChatRequest
 from weave.adapters.driving.lambda_handler import lambda_handler
-from weave.adapters.driving.routing import by_key, by_rules
+from weave.adapters.driving.routing import by_key, by_label, by_rules
 from weave.application.errors import HarnessError, RoutingError
 from weave.application.reply import AgentReply, Usage
 
@@ -150,3 +151,107 @@ def test_chat_router_maps_routing_error_to_404():
     )
 
     assert resp.status_code == 404
+
+
+# --- by_label / labels_of ---------------------------------------------------
+
+
+def _catalog_of(*targets):
+    calls = []
+
+    def catalog():
+        calls.append(1)
+        return list(targets)
+
+    catalog.calls = calls
+    return catalog
+
+
+def _dept(request: ChatRequest) -> str | None:
+    return (request.extras or {}).get("area")
+
+
+def test_by_label_indexes_string_and_list_values():
+    catalog = _catalog_of(
+        TargetInfo("sales_agent", "agent", labels={"departments": ["SALES", "PRE_SALES"]}),
+        TargetInfo("support_agent", "agent", labels={"departments": "SUPPORT"}),
+        TargetInfo("unlabelled", "agent"),
+    )
+    resolve = by_label("departments", key=_dept, catalog=catalog)
+
+    assert resolve(_req("SALES")) == "sales_agent"
+    assert resolve(_req("PRE_SALES")) == "sales_agent"
+    assert resolve(_req("SUPPORT")) == "support_agent"
+
+
+def test_by_label_duplicate_value_across_targets_is_a_harness_error():
+    catalog = _catalog_of(
+        TargetInfo("a", "agent", labels={"departments": ["SALES"]}),
+        TargetInfo("b", "agent", labels={"departments": "SALES"}),
+    )
+    resolve = by_label("departments", key=_dept, catalog=catalog)
+
+    with pytest.raises(HarnessError, match="SALES.*'a'.*'b'"):
+        resolve(_req("SALES"))
+
+
+def test_by_label_same_value_repeated_within_one_target_is_fine():
+    catalog = _catalog_of(TargetInfo("a", "agent", labels={"departments": ["X", "X"]}))
+    assert by_label("departments", key=_dept, catalog=catalog)(_req("X")) == "a"
+
+
+def test_by_label_unmatched_or_missing_key_uses_default_or_404():
+    catalog = _catalog_of(TargetInfo("a", "agent", labels={"departments": "X"}))
+    no_default = by_label("departments", key=_dept, catalog=catalog)
+    with_default = by_label("departments", key=_dept, default="fallback", catalog=catalog)
+
+    with pytest.raises(RoutingError, match="departments"):
+        no_default(_req("ZZZ"))
+    with pytest.raises(RoutingError):
+        no_default(ChatRequest(message="hi", session_id="s"))  # key → None
+    assert with_default(_req("ZZZ")) == "fallback"
+    assert with_default(ChatRequest(message="hi", session_id="s")) == "fallback"
+
+
+def test_by_label_queries_the_catalog_once_and_lazily():
+    catalog = _catalog_of(TargetInfo("a", "agent", labels={"departments": "X"}))
+    resolve = by_label("departments", key=_dept, catalog=catalog)
+    assert catalog.calls == []  # not at construction
+
+    resolve(_req("X"))
+    resolve(_req("X"))
+
+    assert len(catalog.calls) == 1
+
+
+def test_by_label_defaults_to_the_composition_catalog():
+    import weave
+
+    class _Engine:
+        def discover(self):
+            return [TargetInfo("a", "agent", labels={"departments": "X"})]
+
+    weave.configure(engine=_Engine())
+    try:
+        assert by_label("departments", key=_dept)(_req("X")) == "a"
+    finally:
+        weave.configure()
+
+
+def test_labels_of_returns_the_target_labels_or_empty():
+    import weave
+
+    class _Engine:
+        def discover(self):
+            return [
+                TargetInfo("a", "agent", labels={"expose_metrics": True}),
+                TargetInfo("b", "agent"),
+            ]
+
+    weave.configure(engine=_Engine())
+    try:
+        assert weave.labels_of("a").get("expose_metrics") is True
+        assert dict(weave.labels_of("b")) == {}
+        assert dict(weave.labels_of("missing")) == {}
+    finally:
+        weave.configure()

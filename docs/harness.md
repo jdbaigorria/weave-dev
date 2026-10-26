@@ -37,23 +37,45 @@ class AgentReply:
     interrupts: list[Interrupt]  # reported (the agent paused) — not resumed here
     usage: Usage
     session_id: str
+    target: str | None         # the agent/workflow that actually ran (after routing)
+    user_id: str | None        # effective user id of the session (maybe minted by the policy)
+    is_anonymous: bool
     raw: AgentResult           # escape hatch; excluded from model_dump()
 ```
+
+`target`, `user_id` and `is_anonymous` are filled on every reply a Weave use case
+returns (`run_agent`, `run_workflow`, `fork*`, the `done` event of `stream_agent`). They
+answer "which agent ran, and as whom" without the caller re-resolving the route or
+generating identity outside the channel. They are `None` / `False` only on a reply built
+by hand (tests, doubles).
 
 ```python
 class Usage:
     input_tokens: int
     output_tokens: int
     total_tokens: int
-    latency_ms: float
+    latency_ms: float          # wall-clock time of the turn, in milliseconds
+    model_latency_ms: float    # summed model latency, in milliseconds
     tool_calls: list[str]
 ```
+
+`latency_ms` means the same thing for agents and workflows: the turn's wall-clock time
+in **milliseconds** (agents: Strands' `total_duration` × 1000; workflows:
+`execution_time`). `model_latency_ms` is Strands' `accumulated_metrics["latencyMs"]` —
+the time spent in the model alone.
+
+!!! warning "Breaking change: `latency_ms` units"
+    For agents, `latency_ms` used to be Strands' `total_duration` in **seconds**, and for
+    workflows it was the model latency. Both are now wall-clock milliseconds. A consumer
+    that already multiplied agent latency by 1000 must stop doing so; one reading the
+    workflow value as model latency should read `model_latency_ms`.
 
 ### Wrapping `AgentReply` in your own DTO
 
 `AgentReply` is the right shape to consume a turn, but a backend with its own public
 HTTP contract (different field names, an existing frontend) translates it into its own
-model. That translation is yours to own — but map **every** field explicitly:
+model. That translation is yours to own — but map **every** field explicitly (including
+`target`, `user_id` and `is_anonymous`, which say which agent ran and as whom):
 
 ```python
 class MyResponse(BaseModel):
@@ -99,6 +121,9 @@ class WorkflowReply:
     execution_order: list[str]
     interrupts: list[Interrupt]
     session_id: str
+    target: str | None         # same identity fields as AgentReply
+    user_id: str | None
+    is_anonymous: bool
     raw: MultiAgentResult  # escape hatch; excluded from model_dump()
 ```
 
