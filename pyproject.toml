@@ -33,13 +33,13 @@ fastapi = [
 ]
 
 # Local sibling checkout for this repo's own co-dev (`uv sync` picks this up).
-# Needed even though a consumer (fastro) also overrides loom-declarative in its
+# Needed even though a consumer product also overrides loom-declarative in its
 # own [tool.uv.sources]: when weave is resolved from a local editable path,
 # uv's cross-project resolution needs weave's own declared source to agree with
 # the consumer's, or it reports a hard conflict. When weave is consumed as a
 # git dependency instead (a container build, not `uv sync`/`uv pip install`),
 # this table is not read — see the git+https-install note in
-# fastro/backend/Dockerfile (installs weave/loom-declarative via plain `pip`,
+# the consumer's Dockerfile (it installs weave/loom-declarative via plain `pip`,
 # which doesn't understand tool.uv.sources, deliberately, to avoid this exact
 # path leaking into a git-cloned copy of this repo).
 [tool.uv.sources]
