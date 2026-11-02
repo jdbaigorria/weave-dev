@@ -71,6 +71,34 @@ def test_workflow_latency_is_execution_time_and_model_latency_is_separate():
     assert reply.usage.model_latency_ms == 900.0
 
 
+def test_cache_tokens_are_projected_separately():
+    # Bedrock's totalTokens includes cache reads and writes; they are priced differently.
+    usage = {
+        "inputTokens": 3263,
+        "outputTokens": 2050,
+        "totalTokens": 13611,
+        "cacheReadInputTokens": 4149,
+        "cacheWriteInputTokens": 4149,
+    }
+    agent = _project(_agent_result({"accumulated_usage": usage}))
+    workflow = workflow_reply_from_result(
+        SimpleNamespace(status=None, results={}, interrupts=[], accumulated_usage=usage),
+        LoomSession(session_id="s", user_id="u"),
+        target="w",
+    )
+
+    for reply in (agent, workflow):
+        assert (reply.usage.cache_read_input_tokens, reply.usage.cache_write_input_tokens) == (
+            4149,
+            4149,
+        )
+
+
+def test_cache_tokens_default_to_zero():
+    usage = _project(_agent_result({"accumulated_usage": {"totalTokens": 5}})).usage
+    assert (usage.cache_read_input_tokens, usage.cache_write_input_tokens) == (0, 0)
+
+
 def test_missing_latency_keys_default_to_zero():
     agent = _project(_agent_result({}))
     assert (agent.usage.latency_ms, agent.usage.model_latency_ms) == (0.0, 0.0)

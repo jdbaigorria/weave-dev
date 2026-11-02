@@ -127,9 +127,16 @@ line per turn to stdout. CloudWatch Logs turns it into metrics: no API call, no
 | --- | --- | --- |
 | `Turns` | Count (1) | always |
 | `TurnErrors` | Count (0/1) | always — so `TurnErrors / Turns` has no gaps |
-| `TurnDuration` | Milliseconds | always |
-| `BuildDuration` | Milliseconds | when the build finished |
+| `TurnDuration` | Milliseconds (whole) | always |
+| `BuildDuration` | Milliseconds (whole) | when the build finished |
 | `InputTokens`, `OutputTokens`, `TotalTokens`, `ToolCalls` | Count | `ok` |
+| `CacheReadInputTokens`, `CacheWriteInputTokens` | Count | `ok` (0 without prompt caching) |
+
+On Bedrock `TotalTokens` includes the prompt-cache reads and writes, and each kind is
+priced differently. For cost, multiply `InputTokens`, `CacheReadInputTokens`,
+`CacheWriteInputTokens` and `OutputTokens` by their own price; do not price
+`TotalTokens`. The same split is on `Usage` (`cache_read_input_tokens`,
+`cache_write_input_tokens`).
 
 Dimensions default to `target` (plus `service`). `session_id`, `user_id`, `kind`,
 `operation`, `outcome`, `stop_reason` and `error_type` travel as properties — searchable

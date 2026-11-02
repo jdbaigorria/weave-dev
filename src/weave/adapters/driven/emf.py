@@ -36,8 +36,10 @@ class EmfTurnObserver:
         stream: Where to write; ``None`` resolves ``sys.stdout`` at write time.
 
     Metrics per turn: ``Turns`` (1), ``TurnErrors`` (0/1, emitted on every turn so the
-    error rate has no gaps), ``TurnDuration`` and ``BuildDuration`` (ms), and on ``ok``
-    ``InputTokens``, ``OutputTokens``, ``TotalTokens`` and ``ToolCalls``.
+    error rate has no gaps), ``TurnDuration`` and ``BuildDuration`` (whole ms), and on
+    ``ok`` ``InputTokens``, ``OutputTokens``, ``TotalTokens``, ``CacheReadInputTokens``,
+    ``CacheWriteInputTokens`` and ``ToolCalls``. On Bedrock ``TotalTokens`` includes the
+    cache tokens; for cost, price each of the four token metrics on its own.
     """
 
     def __init__(
@@ -66,15 +68,17 @@ class EmfTurnObserver:
         values: list[tuple[str, str, float]] = [
             ("Turns", "Count", 1),
             ("TurnErrors", "Count", 1 if event.outcome == "error" else 0),
-            ("TurnDuration", "Milliseconds", event.duration_ms),
+            ("TurnDuration", "Milliseconds", _whole_ms(event.duration_ms)),
         ]
         if event.build_ms is not None:
-            values.append(("BuildDuration", "Milliseconds", event.build_ms))
+            values.append(("BuildDuration", "Milliseconds", _whole_ms(event.build_ms)))
         if event.outcome == "ok" and event.usage is not None:
             values += [
                 ("InputTokens", "Count", event.usage.input_tokens),
                 ("OutputTokens", "Count", event.usage.output_tokens),
                 ("TotalTokens", "Count", event.usage.total_tokens),
+                ("CacheReadInputTokens", "Count", event.usage.cache_read_input_tokens),
+                ("CacheWriteInputTokens", "Count", event.usage.cache_write_input_tokens),
                 ("ToolCalls", "Count", len(event.usage.tool_calls)),
             ]
         doc = {
@@ -99,6 +103,11 @@ class EmfTurnObserver:
         if self.service:
             dims["service"] = self.service
         return dims
+
+
+def _whole_ms(value: float) -> int:
+    """Half-up, not Python's banker's rounding: 4210.5 ms reads as 4211 in a dashboard."""
+    return int(value + 0.5)
 
 
 def _default_properties(event: TurnEvent) -> dict[str, Any]:
