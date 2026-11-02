@@ -183,7 +183,7 @@ async def fork(
     *,
     at: int,
     extras: dict[str, Any] | None = None,
-    agent_id: str = "default",
+    agent_id: str | None = None,
     model_params: dict[str, Any] | None = None,
 ) -> AgentReply:
     """Rewind a persisted conversation to ``at`` and continue (regenerate/edit/explore).
@@ -415,7 +415,7 @@ def fork_sync(
     *,
     at: int,
     extras: dict[str, Any] | None = None,
-    agent_id: str = "default",
+    agent_id: str | None = None,
     model_params: dict[str, Any] | None = None,
 ) -> AgentReply:
     """Synchronous :func:`fork` — for a caller without an event loop (Lambda)."""

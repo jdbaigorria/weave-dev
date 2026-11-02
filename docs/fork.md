@@ -23,7 +23,9 @@ supplies the rewind via the [`MutableSession`](#mutablesession) capability.
 ```python
 from weave import fork, MutableFileSessionManager
 
-store = MutableFileSessionManager(session_id="s1")   # or your Dynamo/Postgres store
+# The same directory as `session.config.path` in app.yml: without `storage_dir`,
+# Strands uses its own temp default and would truncate another folder.
+store = MutableFileSessionManager(session_id="s1", storage_dir="./sessions")
 
 reply = await fork(
     store,
@@ -38,13 +40,20 @@ It truncates the persisted session to its first `at` messages, **rebuilds** the 
 (which re-initialises cleanly from the now-truncated session — re-syncing messages and
 the next-id cursor), runs the input, and Strands persists the new turn.
 
+Strands keeps each agent's history in its own folder,
+`session_<session_id>/agents/agent_<agent_id>/`, and Loom names it after the agent
+(or the `agent_id` its YAML declares). `fork` truncates `agent_id=name` unless you pass
+`agent_id`, and checks the agent it builds against it: a mismatch raises
+`HarnessError` before invoking, instead of running over the untruncated history. Pass
+`agent_id` when the YAML declares one.
+
 ### `MutableSession`
 
 The capability the backend implements on top of its Strands `SessionManager`:
 
 ```python
 class MutableSession(Protocol):
-    def truncate(self, session_id: str, *, keep: int, agent_id: str = "default") -> None:
+    def truncate(self, session_id: str, *, keep: int, agent_id: str) -> None:
         ...   # delete persisted messages so only the first `keep` remain
 ```
 

@@ -70,6 +70,7 @@ class _Engine:
     def build_agent(self, name, session, *, model_params=None):
         if self.build_error is not None:
             raise self.build_error
+        self.agent.agent_id = name
         return self.agent
 
     def build_workflow(self, name, session, *, model_params=None):

@@ -18,11 +18,14 @@ from typing import Protocol, runtime_checkable
 class MutableSession(Protocol):
     """A session store that can truncate persisted history (for fork/edit)."""
 
-    def truncate(self, session_id: str, *, keep: int, agent_id: str = "default") -> None:
+    def truncate(self, session_id: str, *, keep: int, agent_id: str) -> None:
         """Delete persisted messages so only the first ``keep`` remain (ids 0..keep-1).
 
         ``keep`` may be negative (counted from the end, like a list slice): ``-1``
         keeps all but the last, ``0`` clears the history.
+
+        ``agent_id`` is required: the caller (``fork``) decides which agent folder to
+        rewind; a store has no way to know it.
 
         .. warning::
 

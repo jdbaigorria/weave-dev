@@ -141,7 +141,9 @@ class _Workflow:
 
 class _Engine:
     def build_agent(self, name, session, *, model_params=None):
-        return _Agent()
+        agent = _Agent()
+        agent.agent_id = name
+        return agent
 
     def build_workflow(self, name, session, *, model_params=None):
         return _Workflow(), []
@@ -154,7 +156,7 @@ class _Engine:
 
 
 class _Store:
-    def truncate(self, session_id, *, keep, agent_id="default") -> None:
+    def truncate(self, session_id, *, keep, agent_id) -> None:
         pass
 
 

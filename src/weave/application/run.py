@@ -190,7 +190,7 @@ async def fork(
     *,
     at: int,
     extras: dict[str, Any] | None = None,
-    agent_id: str = "default",
+    agent_id: str | None = None,
     model_params: dict[str, Any] | None = None,
     observers: Sequence[TurnObserver] = (),
 ) -> AgentReply:
@@ -209,6 +209,11 @@ async def fork(
     - explore K:  ``at`` = K, ``input`` = a different message.
 
     For stateless agents (no session persistence) use :func:`fork_stateless`.
+
+    ``agent_id`` names the agent's folder in the session. It defaults to ``name`` —
+    Loom's rule when the YAML declares no ``agent_id``; pass it when the YAML does.
+    The built agent's ``agent_id`` is checked against it before invoking, so a
+    mismatch fails instead of running a turn over the untruncated history.
 
     .. warning::
 
@@ -229,11 +234,13 @@ async def fork(
                 "fork needs a mutable session store (implementing truncate); "
                 "use fork_stateless for stateless agents."
             )
-        store.truncate(session.session_id, keep=at, agent_id=agent_id)
+        resolved_id = agent_id or name
+        _truncate(store, name, session, keep=at, agent_id=resolved_id)
 
         # re-inits from the truncated session
         agent = engine.build_agent(name, session, model_params=model_params)
         turn.built()
+        _check_agent_id(agent, name, resolved_id)
         try:
             result = await agent.invoke_async(input, invocation_state=extras or {})
         except Exception as exc:  # noqa: BLE001 — re-raised as a typed harness error
@@ -282,6 +289,35 @@ async def fork_stateless(
         reply = agent_reply_from_result(result, session, target=name)
         turn.done(reply)
     return reply, list(agent.messages)
+
+
+def _truncate(
+    store: MutableSession, name: str, session: LoomSession, *, keep: int, agent_id: str
+) -> None:
+    """Rewind ``agent_id``'s folder; a store failure becomes a :class:`HarnessError`."""
+    try:
+        store.truncate(session.session_id, keep=keep, agent_id=agent_id)
+    except Exception as exc:  # noqa: BLE001 — re-raised as a typed harness error
+        raise HarnessError(
+            f"fork of '{name}': could not truncate session '{session.session_id}' "
+            f"(agent_id={agent_id!r}): {exc}"
+        ) from exc
+
+
+def _check_agent_id(agent: Any, name: str, expected: str) -> None:
+    """Fail before invoking when the built agent persists under another folder.
+
+    Otherwise a store that silently ignores a missing folder would let the turn run
+    over the full, untruncated history.
+    """
+    actual = getattr(agent, "agent_id", None)
+    if actual == expected:
+        return
+    agent.cleanup()
+    raise HarnessError(
+        f"fork of '{name}': truncated agent_id {expected!r} but the built agent persists "
+        f"as {actual!r}; pass agent_id={actual!r} if its YAML declares one."
+    )
 
 
 def catalog(engine: AgentEngine) -> list[TargetInfo]:

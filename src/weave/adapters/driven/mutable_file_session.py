@@ -18,7 +18,7 @@ from strands.session import FileSessionManager
 class MutableFileSessionManager(FileSessionManager):
     """``FileSessionManager`` plus ``truncate`` — implements :class:`weave.ports.session.MutableSession`."""
 
-    def truncate(self, session_id: str, *, keep: int, agent_id: str = "default") -> None:
+    def truncate(self, session_id: str, *, keep: int, agent_id: str) -> None:
         """Delete persisted messages with id >= the cutoff (keep the first ``keep``).
 
         ``keep`` may be negative (counted from the end). Operates on the on-disk
