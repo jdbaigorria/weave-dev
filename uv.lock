@@ -747,7 +747,7 @@ wheels = [
 
 [[package]]
 name = "loom-declarative"
-version = "1.0.0rc7"
+version = "1.0.0rc8"
 source = { editable = "../loom-dev" }
 dependencies = [
     { name = "omegaconf" },
@@ -1903,7 +1903,7 @@ wheels = [
 
 [[package]]
 name = "weave"
-version = "0.0.9"
+version = "0.0.10"
 source = { editable = "." }
 dependencies = [
     { name = "loom-declarative" },
