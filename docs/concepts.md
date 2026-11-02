@@ -56,6 +56,7 @@ reference adapter for), and checks for it at runtime:
 | Rewind a persisted session | `MutableSession` | `MutableFileSessionManager` | [`fork`](fork.md) |
 | List a user's chats | `ConversationRegistry` | `FileConversationRegistry` | [registry](conversations.md) |
 | Store user uploads | `AssetStore` / `PresignedAssetStore` | `LocalAssetStore` / `S3AssetStore` | [assets](assets.md) |
+| Report each turn (metrics, audit) | `TurnObserver` | `EmfTurnObserver` | [`configure(observers=...)`](observability.md#metrics) |
 
 Each is **opt-in**: wire it and the feature lights up; omit it and Weave does
 nothing extra.
