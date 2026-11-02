@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator, Awaitable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, TypeVar
 
@@ -30,6 +30,7 @@ if TYPE_CHECKING:
     from loom.ports import ConfigSource
 
     from weave.ports.agent_engine import AgentEngine
+    from weave.ports.observer import TurnObserver
 
 _T = TypeVar("_T")
 
@@ -38,10 +39,17 @@ logger = logging.getLogger(__name__)
 # Default engine: Loom over the filesystem workspace. The wired top-level functions
 # read this at call time, so configure() (below) can swap it once at startup.
 _engine: AgentEngine = LoomAgentEngine()
+# Turn observers (metrics, audit). Same lifecycle as the engine: fixed by configure().
+_observers: tuple[TurnObserver, ...] = ()
 
 
-def configure(*, source: ConfigSource | None = None, engine: AgentEngine | None = None) -> None:
-    """Set the engine the wired top-level functions use — the composition root.
+def configure(
+    *,
+    source: ConfigSource | None = None,
+    engine: AgentEngine | None = None,
+    observers: Sequence[TurnObserver] = (),
+) -> None:
+    """Set the engine and turn observers the wired top-level functions use — the composition root.
 
     Call once at startup, before serving traffic. The common case is choosing where
     declarative config comes from::
@@ -56,12 +64,22 @@ def configure(*, source: ConfigSource | None = None, engine: AgentEngine | None 
     ``engine`` instead to install a fully custom :class:`~weave.ports.agent_engine.AgentEngine`
     (e.g. a test double). ``source`` and ``engine`` are mutually exclusive; with
     neither, the engine resets to the Loom filesystem default.
+
+    ``observers`` hear one :class:`~weave.application.observe.TurnEvent` per turn of
+    every wired use case (``run_agent``, ``stream_agent``, ``run_workflow``, ``fork``,
+    ``fork_stateless``, ``run`` — and so every channel and ``lambda_handler``)::
+
+        weave.configure(observers=[EmfTurnObserver("Acme/Agents")])
+
+    ``configure`` fixes **all** the wiring at once: calling it without ``observers``
+    removes the ones set before.
     """
-    global _engine
+    global _engine, _observers
     if source is not None and engine is not None:
         raise HarnessError("configure() takes either source or engine, not both.")
     _engine = engine if engine is not None else LoomAgentEngine(source=source)
-    logger.info("engine configured: %s", type(_engine).__name__)
+    _observers = tuple(observers)
+    logger.info("engine configured: %s (observers=%d)", type(_engine).__name__, len(_observers))
 
 
 async def run_agent(
@@ -82,7 +100,13 @@ async def run_agent(
     persisting them in the config source.
     """
     return await _run.run_agent(
-        _engine, name, input, session, extras=extras, model_params=model_params
+        _engine,
+        name,
+        input,
+        session,
+        extras=extras,
+        model_params=model_params,
+        observers=_observers,
     )
 
 
@@ -103,7 +127,13 @@ def stream_agent(
     :func:`run_agent`).
     """
     return _run.stream_agent(
-        _engine, name, input, session, extras=extras, model_params=model_params
+        _engine,
+        name,
+        input,
+        session,
+        extras=extras,
+        model_params=model_params,
+        observers=_observers,
     )
 
 
@@ -120,7 +150,13 @@ async def run_workflow(
     ``model_params`` — optional per-run overlay applied to every node's model.
     """
     return await _run.run_workflow(
-        _engine, name, input, session, extras=extras, model_params=model_params
+        _engine,
+        name,
+        input,
+        session,
+        extras=extras,
+        model_params=model_params,
+        observers=_observers,
     )
 
 
@@ -166,6 +202,7 @@ async def fork(
         extras=extras,
         agent_id=agent_id,
         model_params=model_params,
+        observers=_observers,
     )
 
 
@@ -181,7 +218,15 @@ async def fork_stateless(
 ) -> tuple[AgentReply, list[Any]]:
     """Stateless fork: caller owns the transcript; returns ``(reply, new_transcript)``."""
     return await _run.fork_stateless(
-        _engine, name, history, input, session, at=at, extras=extras, model_params=model_params
+        _engine,
+        name,
+        history,
+        input,
+        session,
+        at=at,
+        extras=extras,
+        model_params=model_params,
+        observers=_observers,
     )
 
 
@@ -216,7 +261,14 @@ async def run(
 ) -> AgentReply | WorkflowReply:
     """Run ``name`` one-shot, dispatching by kind (default Loom engine)."""
     return await _run.run(
-        _engine, name, input, session, kind=kind, extras=extras, model_params=model_params
+        _engine,
+        name,
+        input,
+        session,
+        kind=kind,
+        extras=extras,
+        model_params=model_params,
+        observers=_observers,
     )
 
 

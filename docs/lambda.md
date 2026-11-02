@@ -187,3 +187,7 @@ app.include_router(asset_router(S3AssetStore("my-bucket")))
 - **Logging** — Weave and Loom log through stdlib `logging` (`weave.*` / `loom.*`),
   so an `aws-lambda-powertools` `Logger` captures both with one bridge — including
   the handler's `500` traceback. See [Observability](observability.md).
+- **Metrics** — `weave.configure(observers=[EmfTurnObserver("Acme/Agents")])` writes
+  one EMF line per turn (turns, errors including failed builds, duration, tokens); no
+  metric calls in `render` or the error mappers. See
+  [Observability → Metrics](observability.md#metrics).

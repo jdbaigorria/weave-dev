@@ -8,6 +8,6 @@ implementation (those live in :mod:`weave.adapters`):
 - ``StateRepository`` — persists the conversation tree (Postgres/Dynamo/...).
 - ``AssetStore`` — user assets (S3/local/...).
 - ``Channel`` — driving side: chat/voice transport (async/streaming).
-- ``MetricsSink`` — observability output.
+- ``TurnObserver`` — told how each turn ended (metrics, audit); see ``observer``.
 - ``ConfigSource`` — where agent definitions come from (re-uses Loom's port).
 """

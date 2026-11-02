@@ -75,6 +75,102 @@ level on `weave` to quiet them. Notable points:
 | `weave.application.run` | DEBUG | build → completed → teardown lifecycle per turn (the guaranteed `cleanup()`) |
 | `weave.adapters.driving.chat` (`chat_router`) | INFO/WARNING | a request mapped to no target (404), execution / definition failure (502) |
 | `weave.adapters.driving.lambda_handler` | INFO/WARNING/**ERROR** | same outcomes; the `500` path logs the **full traceback** (`exc_info`) — the only place it survives, since the response body is opaque |
+| `weave.application.observe` | WARNING | a turn observer raised (with traceback); the turn's reply or error is unchanged |
+
+## Metrics
+
+Weave tells **turn observers** how each turn ended. One line in the composition root
+publishes turns, errors, duration and tokens per target to CloudWatch, with no extra
+dependency:
+
+```python
+import weave
+from weave import EmfTurnObserver
+
+weave.configure(observers=[EmfTurnObserver("Acme/Agents", service="acme")])
+```
+
+Every wired use case notifies the observers once per turn — `run_agent`,
+`stream_agent`, `run_workflow`, `fork`, `fork_stateless`, `run` — and so every
+`ChatChannel` and `lambda_handler`. Your `render` and error mappers no longer need to
+know about metrics.
+
+### The turn event
+
+An observer receives a frozen `TurnEvent`:
+
+| Field | Meaning |
+| --- | --- |
+| `target`, `kind`, `operation` | what ran (`agent` / `workflow`; `run` / `stream` / `fork`) |
+| `session_id`, `user_id`, `is_anonymous` | the effective identity (after the session policy) |
+| `outcome` | `ok`, `error`, or `cancelled` (a stream closed before `done`, or a cancelled task) |
+| `duration_ms` | the use case's wall clock, **build included** |
+| `build_ms` | time to build the agent; `None` if the build failed |
+| `usage`, `stop_reason` | only on `ok` |
+| `error`, `error_type` | only on `error`; `error_type` unwraps the cause chain (`ContextWindowOverflowException`, not `HarnessError`) |
+
+`duration_ms - usage.latency_ms` is roughly what rebuilding the agent per request
+costs. A build that fails (bad YAML, a tool that does not load) is still a turn, with
+`outcome="error"` and `build_ms=None`.
+
+Observers are called in order, synchronously, before the reply is returned — in Lambda
+the process freezes right after the handler returns. One that raises is logged and
+skipped; the turn's result does not change.
+
+### `EmfTurnObserver`
+
+Writes one [Embedded Metric Format](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch_Embedded_Metric_Format_Specification.html)
+line per turn to stdout. CloudWatch Logs turns it into metrics: no API call, no
+`PutMetricData` permission.
+
+| Metric | Unit | When |
+| --- | --- | --- |
+| `Turns` | Count (1) | always |
+| `TurnErrors` | Count (0/1) | always — so `TurnErrors / Turns` has no gaps |
+| `TurnDuration` | Milliseconds | always |
+| `BuildDuration` | Milliseconds | when the build finished |
+| `InputTokens`, `OutputTokens`, `TotalTokens`, `ToolCalls` | Count | `ok` |
+
+Dimensions default to `target` (plus `service`). `session_id`, `user_id`, `kind`,
+`operation`, `outcome`, `stop_reason` and `error_type` travel as properties — searchable
+in Logs Insights, never dimensions (each combination is billed as a metric). Override
+either with `dimensions=lambda e: {...}` / `properties=lambda e: {...}`.
+
+### Your own observer
+
+Any object with `on_turn(event)` works — for example, to keep existing metric names
+with Powertools:
+
+```python
+from aws_lambda_powertools import Metrics
+from aws_lambda_powertools.metrics import MetricUnit
+
+metrics = Metrics(namespace="Acme/Agents")
+
+
+class PowertoolsObserver:
+    def on_turn(self, event):
+        metrics.add_dimension(name="agent", value=event.target)
+        metrics.add_metric(name="AgentInvocations", unit=MetricUnit.Count, value=1)
+        if event.outcome == "error":
+            metrics.add_metric(name="AgentErrors", unit=MetricUnit.Count, value=1)
+        metrics.flush_metrics()
+
+
+weave.configure(observers=[PowertoolsObserver()])
+```
+
+### With Loom's `metrics` hook
+
+Weave sees the turn from outside the agent; it does not split model time from tool
+time. Loom's built-in `metrics` hook does, from inside. Use both, without counting
+tokens twice:
+
+```yaml title="warp/config/app.yml"
+defaults:
+  hooks:
+    - metrics: { sink: emf, namespace: Acme/Agents, include: [breakdown, tools] }
+```
 
 ## Tracing
 

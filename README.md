@@ -58,11 +58,13 @@ their own backend.
 ```
 src/weave/
   domain/        # ConversationTree, Turn, Interrupt — pure logic, 0 deps
-  application/   # use cases: run / stream / fork / content / conversations; errors
-  ports/         # AgentEngine (→ Loom), MutableSession, ConversationRegistry, AssetStore
+  application/   # use cases: run / stream / fork / content / conversations; errors;
+                 #   observe (TurnEvent, once per turn)
+  ports/         # AgentEngine (→ Loom), MutableSession, ConversationRegistry, AssetStore,
+                 #   TurnObserver
   adapters/
     driven/      # loom_engine, dynamo_config_source, mutable_file_session,
-                 #   file_registry, local/s3 assets
+                 #   file_registry, local/s3 assets, emf (EmfTurnObserver)
     driving/     # chat (ChatChannel + chat_router), routing (by_key/by_rules),
                  #   lambda_handler, assets router (the outside calling in)
   composition/   # composition root: wires the default Loom engine + the *_sync wrappers

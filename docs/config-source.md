@@ -31,7 +31,9 @@ reply = await weave.run_agent("assistant", "hello", session)
 
 Call `configure(...)` once at startup, before serving traffic. Passing no arguments
 resets Weave to the default Loom filesystem source; passing `engine=...` installs a
-fully custom `AgentEngine` instead.
+fully custom `AgentEngine` instead. `configure` also fixes the turn observers
+(`observers=[...]`, see [Observability → Metrics](observability.md#metrics)) — it sets
+all the wiring at once, so pass the source and the observers in the same call.
 
 ## Table layout
 
