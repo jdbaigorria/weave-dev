@@ -26,6 +26,7 @@ import logging
 from loom import TargetInfo
 
 from weave.adapters.driven.emf import EmfTurnObserver
+from weave.adapters.driven.feedback_stores import InMemoryFeedbackStore, S3FeedbackStore
 from weave.adapters.driven.file_registry import FileConversationRegistry
 from weave.adapters.driven.local_assets import LocalAssetStore
 from weave.adapters.driven.mutable_file_session import MutableFileSessionManager
@@ -40,7 +41,12 @@ from weave.adapters.driving.chat import (
     chat_router,
 )
 from weave.adapters.driving.identity import mint_if_absent, require
-from weave.adapters.driving.lambda_handler import decode_body, header, lambda_handler
+from weave.adapters.driving.lambda_handler import (
+    decode_body,
+    header,
+    lambda_feedback_handler,
+    lambda_handler,
+)
 from weave.adapters.driving.routing import by_key, by_label, by_rules
 from weave.application.content import (
     build_content,
@@ -52,6 +58,14 @@ from weave.application.content import (
 )
 from weave.application.conversations import list_conversations
 from weave.application.errors import HarnessError, RequestError, RoutingError
+from weave.application.feedback import (
+    Feedback,
+    FeedbackEvent,
+    FeedbackPolicy,
+    FeedbackRecord,
+    IssueType,
+    PolicyFor,
+)
 from weave.application.observe import AgentDescription, TurnEvent
 from weave.application.reply import AgentReply, ChatStreamEvent, Usage, WorkflowReply
 from weave.application.stream import BidiStream, StreamEvent
@@ -75,9 +89,11 @@ from weave.composition import (
     run_workflow,
     run_workflow_sync,
     stream_agent,
+    submit_feedback,
 )
 from weave.ports.assets import AssetRef, AssetStore, PresignedAssetStore
-from weave.ports.observer import TurnObserver
+from weave.ports.feedback import FeedbackStore
+from weave.ports.observer import FeedbackObserver, TurnObserver
 from weave.ports.registry import ConversationRef, ConversationRegistry
 from weave.ports.session import MutableSession, RegenerableSession
 
@@ -107,18 +123,28 @@ __all__ = [
     "ConversationRef",
     "ConversationRegistry",
     "EmfTurnObserver",
+    "Feedback",
+    "FeedbackEvent",
+    "FeedbackObserver",
+    "FeedbackPolicy",
+    "FeedbackRecord",
+    "FeedbackStore",
     "FileConversationRegistry",
     "HarnessError",
+    "InMemoryFeedbackStore",
+    "IssueType",
     "LocalAssetStore",
     "MutableFileSessionManager",
     "MutableSession",
-    "RegenerableSession",
+    "PolicyFor",
     "PresignedAssetStore",
+    "RegenerableSession",
     "RequestError",
     "RoutingError",
-    "SessionPolicy",
     "S3AssetStore",
+    "S3FeedbackStore",
     "S3SessionStore",
+    "SessionPolicy",
     "StreamEvent",
     "TargetInfo",
     "TargetResolver",
@@ -142,15 +168,16 @@ __all__ = [
     "fork_stateless",
     "fork_stateless_sync",
     "fork_sync",
-    "regenerate",
-    "regenerate_sync",
     "header",
     "image_block",
     "labels_of",
+    "lambda_feedback_handler",
     "lambda_handler",
     "list_conversations",
     "mint_if_absent",
     "open_stream",
+    "regenerate",
+    "regenerate_sync",
     "require",
     "routed_channel",
     "run",
@@ -160,6 +187,7 @@ __all__ = [
     "run_workflow",
     "run_workflow_sync",
     "stream_agent",
+    "submit_feedback",
     "text_block",
     "video_block",
 ]

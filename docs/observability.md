@@ -135,6 +135,8 @@ line per turn to stdout. CloudWatch Logs turns it into metrics: no API call, no
 | `CacheReadInputTokens`, `CacheWriteInputTokens` | Count | `ok` (0 without prompt caching) |
 | `Regenerations` | Count (1) | a `regenerate` turn |
 
+The same observer counts [user feedback](feedback.md#metrics) (`on_feedback`) under the same dimensions.
+
 On Bedrock `TotalTokens` includes the prompt-cache reads and writes, and each kind is
 priced differently. For cost, multiply `InputTokens`, `CacheReadInputTokens`,
 `CacheWriteInputTokens` and `OutputTokens` by their own price; do not price

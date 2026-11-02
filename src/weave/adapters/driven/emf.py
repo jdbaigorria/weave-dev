@@ -17,6 +17,7 @@ import time
 from collections.abc import Callable, Mapping
 from typing import Any, TextIO
 
+from weave.application.feedback import FeedbackEvent
 from weave.application.observe import TurnEvent
 
 _MAX_DIMENSIONS = 30
@@ -24,6 +25,11 @@ _MAX_DIMENSIONS = 30
 
 class EmfTurnObserver:
     """A :class:`~weave.ports.observer.TurnObserver` that writes one EMF line per turn.
+
+    Also a :class:`~weave.ports.observer.FeedbackObserver` (:meth:`on_feedback`): the same
+    namespace and ``dimensions`` (it receives the feedback event too; both have
+    ``target``), so a product counting turns counts feedback with no extra wiring.
+    ``properties`` applies to turns only.
 
     Args:
         namespace: CloudWatch namespace (required, non-empty).
@@ -55,7 +61,7 @@ class EmfTurnObserver:
         namespace: str,
         *,
         service: str | None = None,
-        dimensions: Callable[[TurnEvent], Mapping[str, str]] | None = None,
+        dimensions: Callable[[TurnEvent | FeedbackEvent], Mapping[str, str]] | None = None,
         properties: Callable[[TurnEvent], Mapping[str, Any]] | None = None,
         model_dimension: bool = True,
         variant_dimension: bool = True,
@@ -122,9 +128,68 @@ class EmfTurnObserver:
             **dimensions,
             **{name: value for name, _, value in values},
         }
+        self._write(doc)
+
+    def on_feedback(self, event: FeedbackEvent) -> None:
+        """Count what changed with a feedback request, under the turns' dimensions.
+
+        The thumb is counted once, the first time (CloudWatch cannot subtract); a later
+        change shows in ``FeedbackChanged``. Each new issue is its own line with an
+        ``issue`` dimension added to the base. The comment text never leaves the store.
+        """
+        base = dict(self._dimensions(event))
+        values: list[tuple[str, str, float]] = []
+        if event.first:
+            values.append(("Feedback", "Count", 1))
+            positive = event.rating == "up"
+            values.append(("FeedbackPositive" if positive else "FeedbackNegative", "Count", 1))
+        if event.previous_rating is not None and event.previous_rating != event.rating:
+            values.append(("FeedbackChanged", "Count", 1))
+        if event.comment_added:
+            values.append(("FeedbackComments", "Count", 1))
+        properties = {
+            "session_id": event.session_id,
+            "user_id": event.user_id,
+            "turn_id": event.turn_id,
+            "rating": event.rating,
+            "previous_rating": event.previous_rating,
+        }
+        if values:
+            self._write(self._doc([base], values, {**properties, **base}))
+        for issue in event.new_issues:
+            dims = {**base, "issue": issue}
+            self._write(self._doc([dims], [("FeedbackIssue", "Count", 1)], {**properties, **dims}))
+
+    def _doc(
+        self,
+        sets: list[dict[str, str]],
+        values: list[tuple[str, str, float]],
+        fields: dict[str, Any],
+    ) -> dict[str, Any]:
+        for dims in sets:
+            if len(dims) > _MAX_DIMENSIONS:
+                raise ValueError(
+                    f"EMF allows at most {_MAX_DIMENSIONS} dimensions, got {len(dims)}."
+                )
+        return {
+            "_aws": {
+                "Timestamp": int(time.time() * 1000),
+                "CloudWatchMetrics": [
+                    {
+                        "Namespace": self.namespace,
+                        "Dimensions": [list(dims) for dims in sets],
+                        "Metrics": [{"Name": name, "Unit": unit} for name, unit, _ in values],
+                    }
+                ],
+            },
+            **{k: v for k, v in fields.items() if v is not None},
+            **{name: value for name, _, value in values},
+        }
+
+    def _write(self, doc: dict[str, Any]) -> None:
         print(json.dumps(doc), file=self._stream or sys.stdout, flush=True)
 
-    def _default_dimensions(self, event: TurnEvent) -> dict[str, str]:
+    def _default_dimensions(self, event: TurnEvent | FeedbackEvent) -> dict[str, str]:
         dims = {"target": event.target}
         if self.service:
             dims["service"] = self.service

@@ -27,6 +27,13 @@ from loom.errors import LoomError
 from pydantic import BaseModel, Field
 
 from weave.application.errors import HarnessError, RequestError, RoutingError
+from weave.application.feedback import (
+    Feedback,
+    FeedbackPolicy,
+    FeedbackRecord,
+    PolicyFor,
+    submit_feedback,
+)
 from weave.application.reply import AgentReply, ChatStreamEvent, WorkflowReply
 from weave.application.turn_id import resolve_turn_id
 
@@ -35,6 +42,7 @@ logger = logging.getLogger(__name__)
 if TYPE_CHECKING:
     from fastapi import APIRouter
 
+    from weave.ports.feedback import FeedbackStore
     from weave.ports.registry import ConversationRegistry
     from weave.ports.session import RegenerableSession
 
@@ -44,6 +52,8 @@ Runner = Callable[..., Awaitable[AgentReply | WorkflowReply]]
 Streamer = Callable[..., AsyncIterator[ChatStreamEvent]]
 # Overwrites the last turn: ``regenerate(store, name, input, session, *, replaces, ...)``.
 Regenerator = Callable[..., Awaitable[AgentReply]]
+# Stores a feedback: ``submit_feedback(store, feedback, *, target, session, policy)``.
+FeedbackSubmitter = Callable[..., FeedbackRecord]
 
 
 class ChatRequest(BaseModel):
@@ -138,6 +148,9 @@ class ChatChannel:
         session_policy: SessionPolicy | None = None,
         session_store: RegenerableSession | None = None,
         regenerator: Regenerator | None = None,
+        feedback_store: FeedbackStore | None = None,
+        feedback_policy: FeedbackPolicy | PolicyFor | None = None,
+        feedback_submitter: FeedbackSubmitter | None = None,
     ) -> None:
         # A bare name becomes a constant resolver; a callable routes per request.
         self._resolve: TargetResolver = target if callable(target) else (lambda _req: target)
@@ -149,6 +162,9 @@ class ChatChannel:
         self._session_policy: SessionPolicy = session_policy or _strict_session
         self._session_store = session_store
         self._regenerator = regenerator
+        self._feedback_store = feedback_store
+        self._feedback_policy = feedback_policy
+        self._submit_feedback: FeedbackSubmitter = feedback_submitter or submit_feedback
 
     async def handle(self, request: ChatRequest) -> AgentReply | WorkflowReply:
         """Run one turn for ``request`` and return the harness reply.
@@ -191,6 +207,48 @@ class ChatChannel:
             extras=request.extras,
             **_turn_kwargs(request),
         )
+
+    def feedback_options(self, extras: dict[str, Any] | None = None) -> tuple[str, FeedbackPolicy]:
+        """``(target, policy)`` for a request with these ``extras`` — what a UI needs to
+        build its feedback panel. Routed like the chat, so it needs no agent name and no
+        session.
+        """
+        name = self._resolve(ChatRequest(message="", extras=extras))
+        return name, self._policy_for(name)
+
+    def feedback(self, feedback: Feedback) -> FeedbackRecord:
+        """Store a user's rating of one turn and tell the feedback observers what changed.
+
+        The target is resolved like the chat (same ``extras``), unless the turn was
+        already rated, which keeps its first target. ``session_id`` is always required —
+        a feedback without a session has no turn to refer to — and the identity comes
+        from the channel's session policy, so it matches the chat's. The turn is not
+        looked up in the history: a feedback on an unknown turn is stored and crosses
+        with nothing.
+        """
+        if self._feedback_store is None:
+            raise RequestError("this channel does not accept feedback: it has no feedback_store.")
+        request = ChatRequest(
+            message="",
+            session_id=feedback.session_id,
+            user_id=feedback.user_id,
+            extras=feedback.extras,
+        )
+        name = self._resolve(request)
+        session = self._session(request)
+        return self._submit_feedback(
+            self._feedback_store,
+            feedback,
+            target=name,
+            session=session,
+            policy=self._policy_for(name),
+        )
+
+    def _policy_for(self, name: str) -> FeedbackPolicy:
+        policy = self._feedback_policy
+        if policy is None:
+            return FeedbackPolicy()
+        return policy if isinstance(policy, FeedbackPolicy) else policy(name)
 
     def handle_sync(self, request: ChatRequest) -> AgentReply | WorkflowReply:
         """Synchronous :meth:`handle` — for a caller without an event loop (Lambda).

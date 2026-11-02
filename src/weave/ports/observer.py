@@ -1,10 +1,11 @@
-"""weave.ports.observer — Where a finished turn is reported (metrics, audit, ...)."""
+"""weave.ports.observer — Where finished turns and feedback are reported (metrics, audit, ...)."""
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
+    from weave.application.feedback import FeedbackEvent
     from weave.application.observe import TurnEvent
 
 
@@ -22,3 +23,15 @@ class TurnObserver(Protocol):
     """
 
     def on_turn(self, event: TurnEvent) -> None: ...
+
+
+@runtime_checkable
+class FeedbackObserver(Protocol):
+    """Receives one :class:`~weave.application.feedback.FeedbackEvent` per feedback request.
+
+    Same rules as :class:`TurnObserver`: synchronous, called in order, and one that
+    raises is logged and skipped. An observer may implement both (``EmfTurnObserver``
+    does); :func:`weave.configure` hands each event to the ones that have its method.
+    """
+
+    def on_feedback(self, event: FeedbackEvent) -> None: ...

@@ -175,6 +175,8 @@ app.include_router(asset_router(S3AssetStore("my-bucket")))
 
 ## Notes
 
+- **User feedback** on the same function: [`lambda_feedback_handler`](feedback.md), picked by path.
+
 - **`session_id` persistence** needs a durable `session_manager` in Loom
   (DynamoDB/S3) — Lambda's filesystem is ephemeral, so without it every invocation
   starts clean.
