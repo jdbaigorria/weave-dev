@@ -14,12 +14,13 @@ Async-first: voice/streaming and concurrency are first-class, so the executor us
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncIterator
-from typing import Any
+from collections.abc import AsyncIterator, Sequence
+from typing import TYPE_CHECKING, Any
 
 from loom import LoomSession, TargetInfo
 
 from weave.application.errors import HarnessError
+from weave.application.observe import observe_turn
 from weave.application.reply import (
     AgentReply,
     ChatStreamEvent,
@@ -29,6 +30,9 @@ from weave.application.reply import (
 )
 from weave.ports.agent_engine import AgentEngine
 from weave.ports.session import MutableSession
+
+if TYPE_CHECKING:
+    from weave.ports.observer import TurnObserver
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +45,7 @@ async def run_agent(
     *,
     extras: dict[str, Any] | None = None,
     model_params: dict[str, Any] | None = None,
+    observers: Sequence[TurnObserver] = (),
 ) -> AgentReply:
     """Build agent ``name``, run one turn, and return a shaped :class:`AgentReply`.
 
@@ -57,19 +62,27 @@ async def run_agent(
         model_params: Optional per-run overlay of model constructor params (merged on
             top of the declarative config). The build-time channel for per-run secrets
             — e.g. a Bedrock ``boto_session`` carrying per-client credentials.
+        observers: Told once how the turn ended (see :mod:`weave.application.observe`).
+            The window includes the build and the teardown.
     """
-    logger.debug("building agent %r (session=%s)", name, session.session_id)
-    agent = engine.build_agent(name, session, model_params=model_params)
-    try:
-        result = await agent.invoke_async(input, invocation_state=extras or {})
-    except Exception as exc:  # noqa: BLE001 — re-raised as a typed harness error
-        raise HarnessError(f"agent '{name}' failed during execution: {exc}") from exc
-    finally:
-        agent.cleanup()
-        logger.debug("tore down agent %r (session=%s)", name, session.session_id)
+    with observe_turn(
+        observers, target=name, kind="agent", operation="run", session=session
+    ) as turn:
+        logger.debug("building agent %r (session=%s)", name, session.session_id)
+        agent = engine.build_agent(name, session, model_params=model_params)
+        turn.built()
+        try:
+            result = await agent.invoke_async(input, invocation_state=extras or {})
+        except Exception as exc:  # noqa: BLE001 — re-raised as a typed harness error
+            raise HarnessError(f"agent '{name}' failed during execution: {exc}") from exc
+        finally:
+            agent.cleanup()
+            logger.debug("tore down agent %r (session=%s)", name, session.session_id)
 
-    logger.debug("agent %r completed turn (session=%s)", name, session.session_id)
-    return agent_reply_from_result(result, session, target=name)
+        logger.debug("agent %r completed turn (session=%s)", name, session.session_id)
+        reply = agent_reply_from_result(result, session, target=name)
+        turn.done(reply)
+    return reply
 
 
 async def stream_agent(
@@ -80,6 +93,7 @@ async def stream_agent(
     *,
     extras: dict[str, Any] | None = None,
     model_params: dict[str, Any] | None = None,
+    observers: Sequence[TurnObserver] = (),
 ) -> AsyncIterator[ChatStreamEvent]:
     """Build agent ``name`` and stream one turn as :class:`ChatStreamEvent`s.
 
@@ -93,26 +107,32 @@ async def stream_agent(
     Strands' ``stream_async`` emits dicts: ``{"data": str}`` for a text delta and a
     terminal ``{"result": AgentResult}``; tool-use and lifecycle detail ride along in
     each event's ``raw``.
+
+    ``observers`` hear ``ok`` once ``done`` was emitted (even if the consumer closes the
+    stream afterwards), ``error`` on an exception, and ``cancelled`` when the stream is
+    closed before ``done``.
     """
-    logger.debug("building agent %r to stream (session=%s)", name, session.session_id)
-    agent = engine.build_agent(name, session, model_params=model_params)
-    try:
-        async for event in agent.stream_async(input, invocation_state=extras or {}):
-            if not isinstance(event, dict):
-                continue
-            if isinstance(event.get("data"), str):
-                yield ChatStreamEvent(type="delta", text=event["data"], raw=event)
-            if "result" in event:
-                yield ChatStreamEvent(
-                    type="done",
-                    reply=agent_reply_from_result(event["result"], session, target=name),
-                    raw=event,
-                )
-    except Exception as exc:  # noqa: BLE001 — re-raised as a typed harness error
-        raise HarnessError(f"agent '{name}' failed during streaming: {exc}") from exc
-    finally:
-        agent.cleanup()
-        logger.debug("tore down streamed agent %r (session=%s)", name, session.session_id)
+    with observe_turn(
+        observers, target=name, kind="agent", operation="stream", session=session
+    ) as turn:
+        logger.debug("building agent %r to stream (session=%s)", name, session.session_id)
+        agent = engine.build_agent(name, session, model_params=model_params)
+        turn.built()
+        try:
+            async for event in agent.stream_async(input, invocation_state=extras or {}):
+                if not isinstance(event, dict):
+                    continue
+                if isinstance(event.get("data"), str):
+                    yield ChatStreamEvent(type="delta", text=event["data"], raw=event)
+                if "result" in event:
+                    reply = agent_reply_from_result(event["result"], session, target=name)
+                    turn.done(reply)
+                    yield ChatStreamEvent(type="done", reply=reply, raw=event)
+        except Exception as exc:  # noqa: BLE001 — re-raised as a typed harness error
+            raise HarnessError(f"agent '{name}' failed during streaming: {exc}") from exc
+        finally:
+            agent.cleanup()
+            logger.debug("tore down streamed agent %r (session=%s)", name, session.session_id)
 
 
 async def run_workflow(
@@ -123,6 +143,7 @@ async def run_workflow(
     *,
     extras: dict[str, Any] | None = None,
     model_params: dict[str, Any] | None = None,
+    observers: Sequence[TurnObserver] = (),
 ) -> WorkflowReply:
     """Build multi-agent workflow ``name``, run it once, return a :class:`WorkflowReply`.
 
@@ -130,25 +151,32 @@ async def run_workflow(
     ``cleanup()`` of its own, so each node agent is torn down individually (closing
     its MCP connections). ``extras`` propagate to every node as ``invocation_state``.
     ``model_params`` is applied to every node's model (one overlay per run).
+    ``observers`` hear one event for the whole workflow, not one per node.
     """
-    logger.debug("building workflow %r (session=%s)", name, session.session_id)
-    workflow, node_agents = engine.build_workflow(name, session, model_params=model_params)
-    try:
-        result = await workflow.invoke_async(input, invocation_state=extras or {})
-    except Exception as exc:  # noqa: BLE001 — re-raised as a typed harness error
-        raise HarnessError(f"workflow '{name}' failed during execution: {exc}") from exc
-    finally:
-        for node_agent in node_agents:
-            node_agent.cleanup()
-        logger.debug(
-            "tore down workflow %r (%d node agents, session=%s)",
-            name,
-            len(node_agents),
-            session.session_id,
-        )
+    with observe_turn(
+        observers, target=name, kind="workflow", operation="run", session=session
+    ) as turn:
+        logger.debug("building workflow %r (session=%s)", name, session.session_id)
+        workflow, node_agents = engine.build_workflow(name, session, model_params=model_params)
+        turn.built()
+        try:
+            result = await workflow.invoke_async(input, invocation_state=extras or {})
+        except Exception as exc:  # noqa: BLE001 — re-raised as a typed harness error
+            raise HarnessError(f"workflow '{name}' failed during execution: {exc}") from exc
+        finally:
+            for node_agent in node_agents:
+                node_agent.cleanup()
+            logger.debug(
+                "tore down workflow %r (%d node agents, session=%s)",
+                name,
+                len(node_agents),
+                session.session_id,
+            )
 
-    logger.debug("workflow %r completed turn (session=%s)", name, session.session_id)
-    return workflow_reply_from_result(result, session, target=name)
+        logger.debug("workflow %r completed turn (session=%s)", name, session.session_id)
+        reply = workflow_reply_from_result(result, session, target=name)
+        turn.done(reply)
+    return reply
 
 
 async def fork(
@@ -162,6 +190,7 @@ async def fork(
     extras: dict[str, Any] | None = None,
     agent_id: str = "default",
     model_params: dict[str, Any] | None = None,
+    observers: Sequence[TurnObserver] = (),
 ) -> AgentReply:
     """Rewind a **persisted** conversation to ``at`` and continue with ``input``.
 
@@ -190,23 +219,29 @@ async def fork(
         Weave does not impose locking — the backend must serialize concurrent turns on
         a conversation (e.g. a per-``session_id`` lock or queue).
     """
-    if not isinstance(store, MutableSession):
-        raise HarnessError(
-            "fork needs a mutable session store (implementing truncate); "
-            "use fork_stateless for stateless agents."
-        )
-    store.truncate(session.session_id, keep=at, agent_id=agent_id)
+    with observe_turn(
+        observers, target=name, kind="agent", operation="fork", session=session
+    ) as turn:
+        if not isinstance(store, MutableSession):
+            raise HarnessError(
+                "fork needs a mutable session store (implementing truncate); "
+                "use fork_stateless for stateless agents."
+            )
+        store.truncate(session.session_id, keep=at, agent_id=agent_id)
 
-    # re-inits from the truncated session
-    agent = engine.build_agent(name, session, model_params=model_params)
-    try:
-        result = await agent.invoke_async(input, invocation_state=extras or {})
-    except Exception as exc:  # noqa: BLE001 — re-raised as a typed harness error
-        raise HarnessError(f"fork of '{name}' failed during execution: {exc}") from exc
-    finally:
-        agent.cleanup()
+        # re-inits from the truncated session
+        agent = engine.build_agent(name, session, model_params=model_params)
+        turn.built()
+        try:
+            result = await agent.invoke_async(input, invocation_state=extras or {})
+        except Exception as exc:  # noqa: BLE001 — re-raised as a typed harness error
+            raise HarnessError(f"fork of '{name}' failed during execution: {exc}") from exc
+        finally:
+            agent.cleanup()
 
-    return agent_reply_from_result(result, session, target=name)
+        reply = agent_reply_from_result(result, session, target=name)
+        turn.done(reply)
+    return reply
 
 
 async def fork_stateless(
@@ -219,6 +254,7 @@ async def fork_stateless(
     at: int | None = None,
     extras: dict[str, Any] | None = None,
     model_params: dict[str, Any] | None = None,
+    observers: Sequence[TurnObserver] = (),
 ) -> tuple[AgentReply, list[Any]]:
     """Like :func:`fork`, but for stateless agents — the caller owns the transcript.
 
@@ -226,16 +262,22 @@ async def fork_stateless(
     **and the new full transcript** for the caller to persist. Use when session
     persistence is off and your app holds the conversation itself.
     """
-    agent = engine.build_agent(name, session, model_params=model_params)
-    agent.messages = list(history if at is None else history[:at])
-    try:
-        result = await agent.invoke_async(input, invocation_state=extras or {})
-    except Exception as exc:  # noqa: BLE001 — re-raised as a typed harness error
-        raise HarnessError(f"fork of '{name}' failed during execution: {exc}") from exc
-    finally:
-        agent.cleanup()
+    with observe_turn(
+        observers, target=name, kind="agent", operation="fork", session=session
+    ) as turn:
+        agent = engine.build_agent(name, session, model_params=model_params)
+        turn.built()
+        agent.messages = list(history if at is None else history[:at])
+        try:
+            result = await agent.invoke_async(input, invocation_state=extras or {})
+        except Exception as exc:  # noqa: BLE001 — re-raised as a typed harness error
+            raise HarnessError(f"fork of '{name}' failed during execution: {exc}") from exc
+        finally:
+            agent.cleanup()
 
-    return agent_reply_from_result(result, session, target=name), list(agent.messages)
+        reply = agent_reply_from_result(result, session, target=name)
+        turn.done(reply)
+    return reply, list(agent.messages)
 
 
 def catalog(engine: AgentEngine) -> list[TargetInfo]:
@@ -264,11 +306,14 @@ async def run(
     kind: str | None = None,
     extras: dict[str, Any] | None = None,
     model_params: dict[str, Any] | None = None,
+    observers: Sequence[TurnObserver] = (),
 ) -> AgentReply | WorkflowReply:
     """Run ``name`` one-shot, dispatching by kind (discovered unless ``kind`` is given).
 
     Agents and workflows return their reply; ``bidi`` targets are full-duplex and
     have no one-shot reply — use :func:`~weave.application.stream.open_stream`.
+    ``observers`` go to the chosen use case; the dispatch itself emits nothing, so a
+    turn is never counted twice.
     """
     resolved = kind or _kind_of(engine, name)
     logger.debug(
@@ -276,11 +321,23 @@ async def run(
     )
     if resolved == "agent":
         return await run_agent(
-            engine, name, input, session, extras=extras, model_params=model_params
+            engine,
+            name,
+            input,
+            session,
+            extras=extras,
+            model_params=model_params,
+            observers=observers,
         )
     if resolved == "workflow":
         return await run_workflow(
-            engine, name, input, session, extras=extras, model_params=model_params
+            engine,
+            name,
+            input,
+            session,
+            extras=extras,
+            model_params=model_params,
+            observers=observers,
         )
     if resolved == "bidi":
         raise HarnessError(f"'{name}' is a bidi (full-duplex) target — use open_stream, not run.")
