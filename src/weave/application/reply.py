@@ -57,6 +57,10 @@ class AgentReply(BaseModel):
     policy may have decided them, so the caller cannot know them up front). Every reply
     produced by a Weave use case carries them; they are ``None`` / ``False`` only on a
     reply built by hand outside Weave (tests, doubles).
+
+    ``turn_id`` identifies this turn: the caller's id or one Weave minted. It is the
+    key to hang feedback on, and it is stamped in the persisted history and on the
+    turn's metrics. ``replaces`` is the turn a regeneration overwrote.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -70,6 +74,8 @@ class AgentReply(BaseModel):
     target: str | None = None
     user_id: str | None = None
     is_anonymous: bool = False
+    turn_id: str | None = None
+    replaces: str | None = None
     # The full native AgentResult — escape hatch to traces/everything; never serialized.
     raw: Any = Field(default=None, exclude=True, repr=False)
 
@@ -125,7 +131,14 @@ def _usage_of(result: Any) -> Usage:
     )
 
 
-def agent_reply_from_result(result: Any, session: LoomSession, *, target: str) -> AgentReply:
+def agent_reply_from_result(
+    result: Any,
+    session: LoomSession,
+    *,
+    target: str,
+    turn_id: str | None = None,
+    replaces: str | None = None,
+) -> AgentReply:
     """Project a native Strands ``AgentResult`` into an :class:`AgentReply`.
 
     ``session`` and ``target`` are what the turn ran as and against; they fill the
@@ -139,6 +152,8 @@ def agent_reply_from_result(result: Any, session: LoomSession, *, target: str) -
         usage=_usage_of(result),
         session_id=session.session_id,
         target=target,
+        turn_id=turn_id,
+        replaces=replaces,
         user_id=session.user_id,
         is_anonymous=session.is_anonymous,
         raw=result,
@@ -169,7 +184,7 @@ class WorkflowReply(BaseModel):
     ``status`` is prominent (COMPLETED / FAILED / INTERRUPTED): a workflow can
     finish without producing a terminal answer. ``execution_order`` is the node
     ids in the order they ran; per-node detail is reachable through ``raw``.
-    ``target`` / ``user_id`` / ``is_anonymous`` mirror :class:`AgentReply`.
+    ``target`` / ``user_id`` / ``is_anonymous`` / ``turn_id`` mirror :class:`AgentReply`.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -183,6 +198,7 @@ class WorkflowReply(BaseModel):
     target: str | None = None
     user_id: str | None = None
     is_anonymous: bool = False
+    turn_id: str | None = None
     raw: Any = Field(default=None, exclude=True, repr=False)
 
 
@@ -235,7 +251,9 @@ def _workflow_usage_of(result: Any) -> Usage:
     )
 
 
-def workflow_reply_from_result(result: Any, session: LoomSession, *, target: str) -> WorkflowReply:
+def workflow_reply_from_result(
+    result: Any, session: LoomSession, *, target: str, turn_id: str | None = None
+) -> WorkflowReply:
     """Project a native Strands ``MultiAgentResult`` into a :class:`WorkflowReply`."""
     status = getattr(result, "status", None)
     status_str = getattr(status, "name", None) or str(status) if status is not None else "UNKNOWN"
@@ -247,6 +265,7 @@ def workflow_reply_from_result(result: Any, session: LoomSession, *, target: str
         interrupts=_interrupts_of(result),
         session_id=session.session_id,
         target=target,
+        turn_id=turn_id,
         user_id=session.user_id,
         is_anonymous=session.is_anonymous,
         raw=result,

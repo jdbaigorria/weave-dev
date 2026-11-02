@@ -28,6 +28,7 @@ from pydantic import BaseModel, Field
 
 from weave.application.errors import HarnessError, RequestError, RoutingError
 from weave.application.reply import AgentReply, ChatStreamEvent, WorkflowReply
+from weave.application.turn_id import resolve_turn_id
 
 logger = logging.getLogger(__name__)
 
@@ -36,9 +37,9 @@ if TYPE_CHECKING:
 
     from weave.ports.registry import ConversationRegistry
 
-# A use case already bound to an engine: ``run(name, input, session, *, kind, extras)``.
+# A use case already bound to an engine: ``run(name, input, session, *, kind, extras, turn_id)``.
 Runner = Callable[..., Awaitable[AgentReply | WorkflowReply]]
-# Its token-streaming sibling: ``stream_agent(name, input, session, *, extras)``.
+# Its token-streaming sibling: ``stream_agent(name, input, session, *, extras, turn_id)``.
 Streamer = Callable[..., AsyncIterator[ChatStreamEvent]]
 
 
@@ -51,12 +52,17 @@ class ChatRequest(BaseModel):
     absent is the channel's :data:`SessionPolicy`: the default (:func:`require`) is
     strict and raises :class:`~weave.application.errors.RequestError` (→ 400), while
     :func:`~weave.adapters.driving.identity.mint_if_absent` generates one.
+
+    ``turn_id`` is the caller's id for this turn (e.g. the frontend's message id): 1–64
+    of ``[A-Za-z0-9_-]``, or omitted for Weave to mint one. Either way the reply
+    carries it.
     """
 
     message: str | list[Any]
     session_id: str | None = None
     user_id: str | None = None
     extras: dict[str, Any] | None = Field(default=None)
+    turn_id: str | None = None
 
 
 # A pre-agent entrypoint: pick which target a request runs against. The product
@@ -156,6 +162,7 @@ class ChatChannel:
             session,
             kind=self._kind,
             extras=request.extras,
+            **_turn_kwargs(request),
         )
 
     def handle_sync(self, request: ChatRequest) -> AgentReply | WorkflowReply:
@@ -188,7 +195,8 @@ class ChatChannel:
         session = self._session(request)
         logger.debug("chat stream → target %r (session=%s)", name, session.session_id)
         self._record(session)
-        return self._streamer(name, request.message, session, extras=request.extras)
+        kwargs = _turn_kwargs(request)  # a malformed id is a 400 before the stream opens
+        return self._streamer(name, request.message, session, extras=request.extras, **kwargs)
 
     def _session(self, request: ChatRequest) -> LoomSession:
         """Build the run's identity by applying the channel's :data:`SessionPolicy`."""
@@ -198,6 +206,17 @@ class ChatChannel:
         """Upsert the (effective) conversation into the registry (skip anonymous)."""
         if self._registry is not None and not session.is_anonymous:
             self._registry.record(session.user_id, session.session_id)
+
+
+def _turn_kwargs(request: ChatRequest) -> dict[str, Any]:
+    """``turn_id`` for the runner, only when the caller sent one (validated here).
+
+    Without one the use case mints it, so a runner written before ``turn_id`` existed
+    keeps working.
+    """
+    if request.turn_id is None:
+        return {}
+    return {"turn_id": resolve_turn_id(request.turn_id)}
 
 
 def chat_router(

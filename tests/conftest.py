@@ -17,8 +17,9 @@ from weave.adapters.driven.mutable_file_session import MutableFileSessionManager
 class FileLoomEngine:
     """A real Loom build (mock model) persisting sessions under ``root``."""
 
-    def __init__(self, root: str) -> None:
+    def __init__(self, root: str, model: str = "loom.testing.MockModel") -> None:
         self.root = root
+        self.model = model
         self.app = AppConfig(
             conversation="none", session={"provider": "file", "config": {"path": root}}
         )
@@ -27,7 +28,7 @@ class FileLoomEngine:
         config = AgentConfig(
             name=name,
             system_prompt={"prompt": "hi", "is_resolved": True},
-            model=CustomModelConfig(import_path="loom.testing.MockModel"),
+            model=CustomModelConfig(import_path=self.model),
         )
         return loom.build(config, session, app_config=self.app, model_params=model_params)
 

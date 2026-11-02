@@ -54,7 +54,7 @@ def test_weave_root_has_only_a_null_handler():
 def test_run_agent_emits_lifecycle_under_weave_namespace(monkeypatch, caplog):
     # The shaped reply is irrelevant here; stub the factory so _Agent can stay tiny.
     monkeypatch.setattr(
-        run_module, "agent_reply_from_result", lambda result, session, *, target: _reply()
+        run_module, "agent_reply_from_result", lambda result, session, *, target, **_: _reply()
     )
 
     with caplog.at_level(logging.DEBUG, logger="weave"):

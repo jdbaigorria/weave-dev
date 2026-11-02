@@ -136,6 +136,8 @@ def _default_properties(event: TurnEvent) -> dict[str, Any]:
     return {
         "session_id": event.session_id,
         "user_id": event.user_id,
+        "turn_id": event.turn_id,
+        "replaces": event.replaces,
         "kind": event.kind,
         "operation": event.operation,
         "outcome": event.outcome,

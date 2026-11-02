@@ -38,9 +38,22 @@ class ChatRequest(BaseModel):
     session_id: str | None = None  # absent → the channel's SessionPolicy decides
     user_id: str | None = None  # omit → anonymous, session keyed by session_id
     extras: dict[str, Any] | None = None
+    turn_id: str | None = None  # the caller's id for this turn; absent → Weave mints one
 ```
 
 When `user_id` is omitted the session is **anonymous** (keyed by `session_id`).
+
+### The turn id
+
+Every reply carries a `turn_id`. It is the caller's (for example the frontend's message
+id, 1–64 of `[A-Za-z0-9_-]`; anything else is a 400) or a fresh one Weave minted. It is
+the key to hang user feedback on: the same id is on the turn's metrics and logs, and
+stamped in the persisted history on the user message that opened the turn (Strands'
+`metadata.custom["weave.turn_id"]`, stripped before model calls). Store the reply's
+`turn_id`, whether you sent one or not.
+
+Send a new id on every request, retries included: two turns with the same id cannot be
+told apart afterwards.
 
 ### Session policy (strict by default)
 

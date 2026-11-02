@@ -89,6 +89,7 @@ async def run_agent(
     *,
     extras: dict[str, Any] | None = None,
     model_params: dict[str, Any] | None = None,
+    turn_id: str | None = None,
 ) -> AgentReply:
     """Run agent ``name`` for one turn using the default (Loom) engine.
 
@@ -107,6 +108,7 @@ async def run_agent(
         extras=extras,
         model_params=model_params,
         observers=_observers,
+        turn_id=turn_id,
     )
 
 
@@ -117,6 +119,7 @@ def stream_agent(
     *,
     extras: dict[str, Any] | None = None,
     model_params: dict[str, Any] | None = None,
+    turn_id: str | None = None,
 ) -> AsyncIterator[ChatStreamEvent]:
     """Token-stream agent ``name`` for one turn using the default (Loom) engine.
 
@@ -134,6 +137,7 @@ def stream_agent(
         extras=extras,
         model_params=model_params,
         observers=_observers,
+        turn_id=turn_id,
     )
 
 
@@ -144,6 +148,7 @@ async def run_workflow(
     *,
     extras: dict[str, Any] | None = None,
     model_params: dict[str, Any] | None = None,
+    turn_id: str | None = None,
 ) -> WorkflowReply:
     """Run multi-agent workflow ``name`` for one turn using the default (Loom) engine.
 
@@ -157,6 +162,7 @@ async def run_workflow(
         extras=extras,
         model_params=model_params,
         observers=_observers,
+        turn_id=turn_id,
     )
 
 
@@ -185,6 +191,7 @@ async def fork(
     extras: dict[str, Any] | None = None,
     agent_id: str | None = None,
     model_params: dict[str, Any] | None = None,
+    turn_id: str | None = None,
 ) -> AgentReply:
     """Rewind a persisted conversation to ``at`` and continue (regenerate/edit/explore).
 
@@ -203,6 +210,7 @@ async def fork(
         agent_id=agent_id,
         model_params=model_params,
         observers=_observers,
+        turn_id=turn_id,
     )
 
 
@@ -215,6 +223,7 @@ async def fork_stateless(
     at: int | None = None,
     extras: dict[str, Any] | None = None,
     model_params: dict[str, Any] | None = None,
+    turn_id: str | None = None,
 ) -> tuple[AgentReply, list[Any]]:
     """Stateless fork: caller owns the transcript; returns ``(reply, new_transcript)``."""
     return await _run.fork_stateless(
@@ -227,6 +236,7 @@ async def fork_stateless(
         extras=extras,
         model_params=model_params,
         observers=_observers,
+        turn_id=turn_id,
     )
 
 
@@ -258,6 +268,7 @@ async def run(
     kind: str | None = None,
     extras: dict[str, Any] | None = None,
     model_params: dict[str, Any] | None = None,
+    turn_id: str | None = None,
 ) -> AgentReply | WorkflowReply:
     """Run ``name`` one-shot, dispatching by kind (default Loom engine)."""
     return await _run.run(
@@ -269,6 +280,7 @@ async def run(
         extras=extras,
         model_params=model_params,
         observers=_observers,
+        turn_id=turn_id,
     )
 
 
@@ -377,9 +389,12 @@ def run_agent_sync(
     *,
     extras: dict[str, Any] | None = None,
     model_params: dict[str, Any] | None = None,
+    turn_id: str | None = None,
 ) -> AgentReply:
     """Synchronous :func:`run_agent` — for a caller without an event loop (Lambda)."""
-    return _block_on(run_agent(name, input, session, extras=extras, model_params=model_params))
+    return _block_on(
+        run_agent(name, input, session, extras=extras, model_params=model_params, turn_id=turn_id)
+    )
 
 
 def run_workflow_sync(
@@ -389,9 +404,14 @@ def run_workflow_sync(
     *,
     extras: dict[str, Any] | None = None,
     model_params: dict[str, Any] | None = None,
+    turn_id: str | None = None,
 ) -> WorkflowReply:
     """Synchronous :func:`run_workflow` — for a caller without an event loop (Lambda)."""
-    return _block_on(run_workflow(name, input, session, extras=extras, model_params=model_params))
+    return _block_on(
+        run_workflow(
+            name, input, session, extras=extras, model_params=model_params, turn_id=turn_id
+        )
+    )
 
 
 def run_sync(
@@ -402,9 +422,20 @@ def run_sync(
     kind: str | None = None,
     extras: dict[str, Any] | None = None,
     model_params: dict[str, Any] | None = None,
+    turn_id: str | None = None,
 ) -> AgentReply | WorkflowReply:
     """Synchronous :func:`run` — one-shot dispatch by kind for a sync caller (Lambda)."""
-    return _block_on(run(name, input, session, kind=kind, extras=extras, model_params=model_params))
+    return _block_on(
+        run(
+            name,
+            input,
+            session,
+            kind=kind,
+            extras=extras,
+            model_params=model_params,
+            turn_id=turn_id,
+        )
+    )
 
 
 def fork_sync(
@@ -417,6 +448,7 @@ def fork_sync(
     extras: dict[str, Any] | None = None,
     agent_id: str | None = None,
     model_params: dict[str, Any] | None = None,
+    turn_id: str | None = None,
 ) -> AgentReply:
     """Synchronous :func:`fork` — for a caller without an event loop (Lambda)."""
     return _block_on(
@@ -429,6 +461,7 @@ def fork_sync(
             extras=extras,
             agent_id=agent_id,
             model_params=model_params,
+            turn_id=turn_id,
         )
     )
 
@@ -442,10 +475,18 @@ def fork_stateless_sync(
     at: int | None = None,
     extras: dict[str, Any] | None = None,
     model_params: dict[str, Any] | None = None,
+    turn_id: str | None = None,
 ) -> tuple[AgentReply, list[Any]]:
     """Synchronous :func:`fork_stateless` — for a caller without an event loop (Lambda)."""
     return _block_on(
         fork_stateless(
-            name, history, input, session, at=at, extras=extras, model_params=model_params
+            name,
+            history,
+            input,
+            session,
+            at=at,
+            extras=extras,
+            model_params=model_params,
+            turn_id=turn_id,
         )
     )
