@@ -25,11 +25,17 @@ class Usage(BaseModel):
     Strands reports as ``accumulated_metrics["latencyMs"]``), also in milliseconds — it
     excludes tool time and orchestration, so it is never larger than ``latency_ms`` for
     a sequential turn.
+
+    ``total_tokens`` is what the provider reports and, on Bedrock, includes the prompt-cache
+    reads and writes; ``cache_read_input_tokens`` / ``cache_write_input_tokens`` split them
+    out, since each is priced differently from ``input_tokens``.
     """
 
     input_tokens: int = 0
     output_tokens: int = 0
     total_tokens: int = 0
+    cache_read_input_tokens: int = 0
+    cache_write_input_tokens: int = 0
     latency_ms: float = 0.0
     model_latency_ms: float = 0.0
     tool_calls: list[str] = Field(default_factory=list)
@@ -110,6 +116,8 @@ def _usage_of(result: Any) -> Usage:
         input_tokens=acc.get("inputTokens", 0),
         output_tokens=acc.get("outputTokens", 0),
         total_tokens=acc.get("totalTokens", 0),
+        cache_read_input_tokens=acc.get("cacheReadInputTokens", 0) or 0,
+        cache_write_input_tokens=acc.get("cacheWriteInputTokens", 0) or 0,
         # Strands reports ``total_duration`` (sum of cycle durations) in seconds.
         latency_ms=float(summary.get("total_duration", 0.0) or 0.0) * 1000.0,
         model_latency_ms=float(model_metrics.get("latencyMs", 0) or 0),
@@ -219,6 +227,8 @@ def _workflow_usage_of(result: Any) -> Usage:
         input_tokens=_field(acc, "inputTokens", 0),
         output_tokens=_field(acc, "outputTokens", 0),
         total_tokens=_field(acc, "totalTokens", 0),
+        cache_read_input_tokens=_field(acc, "cacheReadInputTokens", 0) or 0,
+        cache_write_input_tokens=_field(acc, "cacheWriteInputTokens", 0) or 0,
         # ``execution_time`` is the workflow's wall-clock time, already in ms.
         latency_ms=float(getattr(result, "execution_time", 0) or 0),
         model_latency_ms=float(_field(metrics, "latencyMs", 0) or 0),

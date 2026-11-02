@@ -24,7 +24,14 @@ def _event(**kw) -> TurnEvent:
         outcome="ok",
         duration_ms=4210.5,
         build_ms=120.0,
-        usage=Usage(input_tokens=10, output_tokens=5, total_tokens=15, tool_calls=["a", "b"]),
+        usage=Usage(
+            input_tokens=10,
+            output_tokens=5,
+            total_tokens=23,
+            cache_read_input_tokens=3,
+            cache_write_input_tokens=5,
+            tool_calls=["a", "b"],
+        ),
         stop_reason="end_turn",
     )
     return TurnEvent(**{**base, **kw})
@@ -57,10 +64,16 @@ def test_ok_turn(out):
         "InputTokens": "Count",
         "OutputTokens": "Count",
         "TotalTokens": "Count",
+        "CacheReadInputTokens": "Count",
+        "CacheWriteInputTokens": "Count",
         "ToolCalls": "Count",
     }
     assert all(name in doc for name in units)
-    assert (doc["Turns"], doc["TurnErrors"], doc["TotalTokens"], doc["ToolCalls"]) == (1, 0, 15, 2)
+    assert (doc["Turns"], doc["TurnErrors"], doc["TotalTokens"], doc["ToolCalls"]) == (1, 0, 23, 2)
+    assert (doc["CacheReadInputTokens"], doc["CacheWriteInputTokens"]) == (3, 5)
+    # Whole milliseconds: sub-ms precision is noise in a dashboard.
+    assert (doc["TurnDuration"], doc["BuildDuration"]) == (4211, 120)
+    assert isinstance(doc["TurnDuration"], int)
     assert (doc["target"], doc["service"]) == ("billing", "acme")
     assert (doc["session_id"], doc["outcome"], doc["operation"]) == ("s-1", "ok", "run")
 
@@ -80,6 +93,7 @@ def test_error_turn(out):
     assert doc["TurnErrors"] == 1
     assert doc["error_type"] == "ContextWindowOverflowException"
     assert "TotalTokens" not in doc and "ToolCalls" not in doc
+    assert "CacheReadInputTokens" not in doc
 
 
 def test_no_build_duration_when_the_build_did_not_finish(out):
