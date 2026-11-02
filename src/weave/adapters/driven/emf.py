@@ -33,7 +33,14 @@ class EmfTurnObserver:
         properties: ``event -> {name: value}`` replacing the default properties —
             fields on the line that are **not** dimensions (searchable in Logs Insights
             without paying for cardinality).
+        model_dimension: Also aggregate by model: adds the ``[base + model]`` dimension
+            set when the turn has a ``model_id``.
+        variant_dimension: Also aggregate by variant (the agent's ``metrics.variant``
+            label): adds ``[base + variant]`` when the turn has one.
         stream: Where to write; ``None`` resolves ``sys.stdout`` at write time.
+
+    ``base`` is what ``dimensions`` returns, so a custom base gets the extra sets too.
+    Each extra set is one more series per metric.
 
     Metrics per turn: ``Turns`` (1), ``TurnErrors`` (0/1, emitted on every turn so the
     error rate has no gaps), ``TurnDuration`` and ``BuildDuration`` (whole ms), and on
@@ -49,6 +56,8 @@ class EmfTurnObserver:
         service: str | None = None,
         dimensions: Callable[[TurnEvent], Mapping[str, str]] | None = None,
         properties: Callable[[TurnEvent], Mapping[str, Any]] | None = None,
+        model_dimension: bool = True,
+        variant_dimension: bool = True,
         stream: TextIO | None = None,
     ) -> None:
         if not namespace:
@@ -57,14 +66,26 @@ class EmfTurnObserver:
         self.service = service
         self._dimensions = dimensions or self._default_dimensions
         self._properties = properties or _default_properties
+        self._model_dimension = model_dimension
+        self._variant_dimension = variant_dimension
         self._stream = stream
 
     def on_turn(self, event: TurnEvent) -> None:
-        dimensions = dict(self._dimensions(event))
-        if len(dimensions) > _MAX_DIMENSIONS:
-            raise ValueError(
-                f"EMF allows at most {_MAX_DIMENSIONS} dimensions, got {len(dimensions)}."
-            )
+        base = dict(self._dimensions(event))
+        sets = [base]
+        if self._model_dimension and event.model_id:
+            sets.append({**base, "model": event.model_id})
+        if self._variant_dimension and event.variant:
+            sets.append({**base, "variant": event.variant})
+        for dims in sets:
+            if len(dims) > _MAX_DIMENSIONS:
+                raise ValueError(
+                    f"EMF allows at most {_MAX_DIMENSIONS} dimensions, got {len(dims)}."
+                )
+        # EMF needs each dimension's value at the root; model and variant also travel as
+        # properties when they are not dimensions.
+        dimensions = {k: v for dims in sets for k, v in dims.items()}
+        model_fields = {"model": event.model_id, "variant": event.variant}
         values: list[tuple[str, str, float]] = [
             ("Turns", "Count", 1),
             ("TurnErrors", "Count", 1 if event.outcome == "error" else 0),
@@ -87,12 +108,13 @@ class EmfTurnObserver:
                 "CloudWatchMetrics": [
                     {
                         "Namespace": self.namespace,
-                        "Dimensions": [list(dimensions)],
+                        "Dimensions": [list(dims) for dims in sets],
                         "Metrics": [{"Name": name, "Unit": unit} for name, unit, _ in values],
                     }
                 ],
             },
             **{k: v for k, v in self._properties(event).items() if v is not None},
+            **{k: v for k, v in model_fields.items() if v is not None},
             **dimensions,
             **{name: value for name, _, value in values},
         }
@@ -119,4 +141,8 @@ def _default_properties(event: TurnEvent) -> dict[str, Any]:
         "outcome": event.outcome,
         "stop_reason": event.stop_reason,
         "error_type": event.error_type,
+        "model_config": (
+            event.model_settings.model_dump(exclude_none=True) if event.model_settings else None
+        ),
+        "model_fallbacks": event.model_fallbacks if event.model_id else None,
     }

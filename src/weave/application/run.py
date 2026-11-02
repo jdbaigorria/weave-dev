@@ -76,6 +76,7 @@ async def run_agent(
         except Exception as exc:  # noqa: BLE001 — re-raised as a typed harness error
             raise HarnessError(f"agent '{name}' failed during execution: {exc}") from exc
         finally:
+            turn.describe(engine, agent)
             agent.cleanup()
             logger.debug("tore down agent %r (session=%s)", name, session.session_id)
 
@@ -131,6 +132,7 @@ async def stream_agent(
         except Exception as exc:  # noqa: BLE001 — re-raised as a typed harness error
             raise HarnessError(f"agent '{name}' failed during streaming: {exc}") from exc
         finally:
+            turn.describe(engine, agent)
             agent.cleanup()
             logger.debug("tore down streamed agent %r (session=%s)", name, session.session_id)
 
@@ -237,6 +239,7 @@ async def fork(
         except Exception as exc:  # noqa: BLE001 — re-raised as a typed harness error
             raise HarnessError(f"fork of '{name}' failed during execution: {exc}") from exc
         finally:
+            turn.describe(engine, agent)
             agent.cleanup()
 
         reply = agent_reply_from_result(result, session, target=name)
@@ -273,6 +276,7 @@ async def fork_stateless(
         except Exception as exc:  # noqa: BLE001 — re-raised as a typed harness error
             raise HarnessError(f"fork of '{name}' failed during execution: {exc}") from exc
         finally:
+            turn.describe(engine, agent)
             agent.cleanup()
 
         reply = agent_reply_from_result(result, session, target=name)

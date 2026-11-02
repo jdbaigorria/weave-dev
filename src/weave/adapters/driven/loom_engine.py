@@ -18,6 +18,8 @@ from typing import TYPE_CHECKING, Any, cast
 import loom
 from loom import LoomSession, TargetInfo
 
+from weave.application.observe import AgentDescription
+
 if TYPE_CHECKING:
     from loom.ports import ConfigSource
 
@@ -50,3 +52,13 @@ class LoomAgentEngine:
 
     def discover(self) -> list[TargetInfo]:
         return cast("list[TargetInfo]", loom.discover(self._source))
+
+    def describe(self, agent: Any) -> AgentDescription:
+        """The model that answered, from Loom's public ``describe_model`` / ``variant_of``."""
+        model = loom.describe_model(agent)
+        return AgentDescription(
+            model_id=model.model_id,
+            model_settings=model.settings,
+            model_fallbacks=model.fallbacks,
+            variant=loom.variant_of(agent),
+        )
