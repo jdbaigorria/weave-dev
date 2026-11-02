@@ -13,6 +13,7 @@ Public surface::
 
     from weave import catalog, run, run_agent, run_workflow, open_stream
     from weave import AgentReply, WorkflowReply, StreamEvent, Usage
+    from weave import TurnEvent, TurnObserver, EmfTurnObserver   # turn metrics
     reply = await run_agent("assistant", "hello", LoomSession(...))
 
 Conversation persistence is Strands' job (a ``session_manager`` configured in Loom),
@@ -24,6 +25,7 @@ import logging
 
 from loom import TargetInfo
 
+from weave.adapters.driven.emf import EmfTurnObserver
 from weave.adapters.driven.file_registry import FileConversationRegistry
 from weave.adapters.driven.local_assets import LocalAssetStore
 from weave.adapters.driven.mutable_file_session import MutableFileSessionManager
@@ -49,6 +51,7 @@ from weave.application.content import (
 )
 from weave.application.conversations import list_conversations
 from weave.application.errors import HarnessError, RequestError, RoutingError
+from weave.application.observe import TurnEvent
 from weave.application.reply import AgentReply, ChatStreamEvent, Usage, WorkflowReply
 from weave.application.stream import BidiStream, StreamEvent
 from weave.composition import (
@@ -71,6 +74,7 @@ from weave.composition import (
     stream_agent,
 )
 from weave.ports.assets import AssetRef, AssetStore, PresignedAssetStore
+from weave.ports.observer import TurnObserver
 from weave.ports.registry import ConversationRef, ConversationRegistry
 from weave.ports.session import MutableSession
 
@@ -98,6 +102,7 @@ __all__ = [
     "ChatStreamEvent",
     "ConversationRef",
     "ConversationRegistry",
+    "EmfTurnObserver",
     "FileConversationRegistry",
     "HarnessError",
     "LocalAssetStore",
@@ -111,6 +116,8 @@ __all__ = [
     "StreamEvent",
     "TargetInfo",
     "TargetResolver",
+    "TurnEvent",
+    "TurnObserver",
     "Usage",
     "WorkflowReply",
     "asset_router",
