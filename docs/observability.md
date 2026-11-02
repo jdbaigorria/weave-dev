@@ -108,6 +108,7 @@ An observer receives a frozen `TurnEvent`:
 | `build_ms` | time to build the agent; `None` if the build failed |
 | `usage`, `stop_reason` | only on `ok` |
 | `error`, `error_type` | only on `error`; `error_type` unwraps the cause chain (`ContextWindowOverflowException`, not `HarnessError`) |
+| `model_id`, `model_settings`, `model_fallbacks`, `variant` | the model the agent answered with, Loom's whitelisted settings, failed router tries, and the `metrics.variant` label — also on `error` once the agent was built; `None` for workflows and failed builds |
 
 `duration_ms - usage.latency_ms` is roughly what rebuilding the agent per request
 costs. A build that fails (bad YAML, a tool that does not load) is still a turn, with
@@ -138,7 +139,14 @@ priced differently. For cost, multiply `InputTokens`, `CacheReadInputTokens`,
 `TotalTokens`. The same split is on `Usage` (`cache_read_input_tokens`,
 `cache_write_input_tokens`).
 
-Dimensions default to `target` (plus `service`). `session_id`, `user_id`, `kind`,
+Dimensions default to `target` (plus `service`). When the turn has a model, the line
+also declares `[base + model]`, and `[base + variant]` when the agent has a
+`metrics.variant` label — `base` being the default or your `dimensions`. That gives
+tokens and cost per model, and per experiment variant, next to the per-target view.
+Turn them off with `model_dimension=False` / `variant_dimension=False`; each extra set is
+one more series per metric. `model_config` (the whitelisted settings) and
+`model_fallbacks` travel as properties.
+ `session_id`, `user_id`, `kind`,
 `operation`, `outcome`, `stop_reason` and `error_type` travel as properties — searchable
 in Logs Insights, never dimensions (each combination is billed as a metric). Override
 either with `dimensions=lambda e: {...}` / `properties=lambda e: {...}`.

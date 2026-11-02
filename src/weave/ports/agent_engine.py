@@ -9,9 +9,12 @@ away (Weave depends on Loom; this is a test seam, not a vendor swap).
 
 from __future__ import annotations
 
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from loom import LoomSession, TargetInfo
+
+if TYPE_CHECKING:
+    from weave.application.observe import AgentDescription
 
 
 class AgentEngine(Protocol):
@@ -40,4 +43,17 @@ class AgentEngine(Protocol):
 
     def discover(self) -> list[TargetInfo]:
         """Return the catalog of buildable targets (name + kind + description)."""
+        ...
+
+
+class AgentDescriber(Protocol):
+    """Optional engine capability: which model a built agent answered with.
+
+    Not part of :class:`AgentEngine` on purpose — an engine (or a test double) without it
+    keeps working, and its turns report no model. The use cases call it after the turn
+    and before the teardown, only when turn observers are configured.
+    """
+
+    def describe(self, agent: Any) -> AgentDescription | None:
+        """Return the model, its whitelisted settings and the variant of ``agent``."""
         ...

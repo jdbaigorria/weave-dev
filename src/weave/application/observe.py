@@ -19,7 +19,7 @@ from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, Literal
 
-from loom import LoomSession
+from loom import LoomSession, ModelSettings
 from pydantic import BaseModel, ConfigDict
 
 from weave.application.reply import Usage
@@ -30,6 +30,21 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 Outcome = Literal["ok", "error", "cancelled"]
+
+
+class AgentDescription(BaseModel):
+    """Which model a built agent answered with — what an engine's ``describe`` returns.
+
+    ``model_settings`` is Loom's whitelist (:class:`loom.ModelSettings`); ``variant`` the
+    agent's ``metrics.variant`` label.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    model_id: str | None = None
+    model_settings: ModelSettings | None = None
+    model_fallbacks: int = 0
+    variant: str | None = None
 
 
 class TurnEvent(BaseModel):
@@ -55,6 +70,10 @@ class TurnEvent(BaseModel):
     usage: Usage | None = None
     stop_reason: str | None = None
     error: BaseException | None = None
+    model_id: str | None = None
+    model_settings: ModelSettings | None = None
+    model_fallbacks: int = 0
+    variant: str | None = None
 
     @property
     def error_type(self) -> str | None:
@@ -72,10 +91,12 @@ class TurnEvent(BaseModel):
 class TurnClock:
     """The running turn: :func:`observe_turn` hands it to the use case."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, active: bool = True) -> None:
         self._start = time.perf_counter()
+        self.active = active
         self.build_ms: float | None = None
         self.reply: Any = None
+        self.description: AgentDescription | None = None
 
     def built(self) -> None:
         """Mark the end of the build."""
@@ -84,6 +105,20 @@ class TurnClock:
     def done(self, reply: Any) -> None:
         """Record the reply: from here on, the turn is ``ok`` even if the stream is closed."""
         self.reply = reply
+
+    def describe(self, engine: Any, agent: Any) -> None:
+        """Ask the engine which model ``agent`` answered with, before its teardown.
+
+        Optional capability: an engine without ``describe`` leaves the model empty. One
+        that raises is logged and ignored. Skipped when no observer will read it.
+        """
+        describe = getattr(engine, "describe", None)
+        if not self.active or not callable(describe):
+            return
+        try:
+            self.description = describe(agent)
+        except Exception:
+            logger.warning("engine describe failed; the turn reports no model", exc_info=True)
 
     def elapsed_ms(self) -> float:
         return (time.perf_counter() - self._start) * 1000.0
@@ -104,7 +139,7 @@ def observe_turn(
     ``GeneratorExit`` / ``CancelledError`` before :meth:`TurnClock.done` is ``cancelled``;
     after it, the turn already answered and stays ``ok``.
     """
-    clock = TurnClock()
+    clock = TurnClock(active=bool(observers))
     try:
         yield clock
     except BaseException as exc:
@@ -133,6 +168,7 @@ def _event(
     error: BaseException | None = None,
 ) -> TurnEvent:
     reply = clock.reply if outcome == "ok" else None
+    description = clock.description or AgentDescription()
     return TurnEvent(
         target=target,
         kind=kind,
@@ -146,6 +182,10 @@ def _event(
         usage=getattr(reply, "usage", None),
         stop_reason=getattr(reply, "stop_reason", None),
         error=error,
+        model_id=description.model_id,
+        model_settings=description.model_settings,
+        model_fallbacks=description.model_fallbacks,
+        variant=description.variant,
     )
 
 

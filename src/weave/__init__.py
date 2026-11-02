@@ -51,7 +51,7 @@ from weave.application.content import (
 )
 from weave.application.conversations import list_conversations
 from weave.application.errors import HarnessError, RequestError, RoutingError
-from weave.application.observe import TurnEvent
+from weave.application.observe import AgentDescription, TurnEvent
 from weave.application.reply import AgentReply, ChatStreamEvent, Usage, WorkflowReply
 from weave.application.stream import BidiStream, StreamEvent
 from weave.composition import (
@@ -93,6 +93,7 @@ __version__ = "0.0.1"
 logging.getLogger("weave").addHandler(logging.NullHandler())
 
 __all__ = [
+    "AgentDescription",
     "AgentReply",
     "AssetRef",
     "AssetStore",
