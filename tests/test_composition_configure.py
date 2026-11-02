@@ -69,3 +69,71 @@ def test_configure_resets_to_default_with_no_args():
 def test_configure_rejects_both_source_and_engine():
     with pytest.raises(HarnessError, match="either source or engine"):
         weave.configure(source=object(), engine=_FakeEngine())
+
+
+# --- W7: configure(observers=...) ---------------------------------------------
+
+
+class _Recorder:
+    def __init__(self) -> None:
+        self.events: list = []
+
+    def on_turn(self, event) -> None:
+        self.events.append(event)
+
+
+class _TurnEngine:
+    """Builds a fake agent for any target and lists two agents in the catalog."""
+
+    def discover(self):
+        from types import SimpleNamespace
+
+        return [SimpleNamespace(name=n, kind="agent", labels={}) for n in ("sales", "support")]
+
+    def build_agent(self, name, session, *, model_params=None):
+        from types import SimpleNamespace
+
+        result = SimpleNamespace(
+            message={"content": [{"text": "ok"}]},
+            structured_output=None,
+            stop_reason="end_turn",
+            interrupts=[],
+            metrics=SimpleNamespace(get_summary=lambda: {}),
+        )
+
+        async def invoke_async(prompt, *, invocation_state=None):
+            return result
+
+        return SimpleNamespace(invoke_async=invoke_async, cleanup=lambda: None)
+
+
+def test_observers_hear_a_turn_through_lambda_handler_with_the_resolved_target():
+    import json
+
+    from weave import lambda_handler, routed_channel
+
+    obs = _Recorder()
+    weave.configure(engine=_TurnEngine(), observers=[obs])
+    handler = lambda_handler(routed_channel(lambda request: "support"))
+
+    resp = handler({"body": json.dumps({"message": "hi", "session_id": "s-1"})}, None)
+
+    assert resp["statusCode"] == 200
+    (event,) = obs.events
+    assert (event.target, event.outcome, event.session_id) == ("support", "ok", "s-1")
+
+
+def test_configure_without_args_drops_the_observers():
+    weave.configure(engine=_TurnEngine(), observers=[_Recorder()])
+    weave.configure()
+
+    assert composition._observers == ()
+
+
+def test_configure_with_source_and_observers_keeps_both():
+    source = object()
+    obs = _Recorder()
+    weave.configure(source=source, observers=[obs])
+
+    assert composition._engine._source is source
+    assert composition._observers == (obs,)
