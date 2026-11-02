@@ -24,7 +24,7 @@ from weave.application.errors import HarnessError
 from weave.application.reply import AgentReply, ChatStreamEvent, WorkflowReply
 from weave.application.stream import BidiStream
 from weave.ports.registry import ConversationRegistry
-from weave.ports.session import MutableSession
+from weave.ports.session import MutableSession, RegenerableSession
 
 if TYPE_CHECKING:
     from loom.ports import ConfigSource
@@ -214,6 +214,41 @@ async def fork(
     )
 
 
+async def regenerate(
+    store: RegenerableSession,
+    name: str,
+    input: Any,
+    session: LoomSession,
+    *,
+    replaces: str,
+    kind: str | None = None,
+    extras: dict[str, Any] | None = None,
+    agent_id: str | None = None,
+    model_params: dict[str, Any] | None = None,
+    turn_id: str | None = None,
+) -> AgentReply:
+    """Overwrite the last turn ``replaces`` and run ``input`` (default Loom engine).
+
+    See :func:`weave.application.run.regenerate`. ``store`` rewinds the same storage
+    Loom's session uses (:class:`~weave.adapters.driven.mutable_file_session.MutableFileSessionManager`
+    or :class:`~weave.adapters.driven.s3_session_store.S3SessionStore`).
+    """
+    return await _run.regenerate(
+        _engine,
+        store,
+        name,
+        input,
+        session,
+        replaces=replaces,
+        kind=kind,
+        extras=extras,
+        agent_id=agent_id,
+        model_params=model_params,
+        observers=_observers,
+        turn_id=turn_id,
+    )
+
+
 async def fork_stateless(
     name: str,
     history: list[Any],
@@ -290,6 +325,7 @@ def chat_channel(
     kind: str | None = None,
     registry: ConversationRegistry | None = None,
     session_policy: SessionPolicy | None = None,
+    session_store: RegenerableSession | None = None,
 ) -> ChatChannel:
     """Build a :class:`~weave.adapters.driving.chat.ChatChannel` for ``name``.
 
@@ -307,6 +343,10 @@ def chat_channel(
     it defaults to the strict :func:`~weave.adapters.driving.identity.require` (a
     request must carry its own ``session_id``). Pass
     :func:`~weave.adapters.driving.identity.mint_if_absent` to generate one.
+
+    Pass a ``session_store`` (over the same storage as Loom's session) to accept
+    requests with ``replaces``: they regenerate that last turn instead of running a
+    new one. Without it such a request is a 400.
     """
     return ChatChannel(
         name,
@@ -315,6 +355,8 @@ def chat_channel(
         registry=registry,
         kind=kind,
         session_policy=session_policy,
+        session_store=session_store,
+        regenerator=regenerate if session_store is not None else None,
     )
 
 
@@ -323,6 +365,7 @@ def routed_channel(
     *,
     registry: ConversationRegistry | None = None,
     session_policy: SessionPolicy | None = None,
+    session_store: RegenerableSession | None = None,
 ) -> ChatChannel:
     """Build a multi-target :class:`~weave.adapters.driving.chat.ChatChannel` (a router).
 
@@ -338,10 +381,16 @@ def routed_channel(
     a constant resolver. Mount it the same way (:func:`weave.adapters.driving.chat.chat_router`
     or :func:`weave.adapters.driving.lambda_handler.lambda_handler`). ``session_policy``
     behaves as in :func:`chat_channel` (strict :func:`~weave.adapters.driving.identity.require`
-    by default).
+    by default), and so does ``session_store``.
     """
     return ChatChannel(
-        resolve, run, streamer=stream_agent, registry=registry, session_policy=session_policy
+        resolve,
+        run,
+        streamer=stream_agent,
+        registry=registry,
+        session_policy=session_policy,
+        session_store=session_store,
+        regenerator=regenerate if session_store is not None else None,
     )
 
 
@@ -458,6 +507,36 @@ def fork_sync(
             input,
             session,
             at=at,
+            extras=extras,
+            agent_id=agent_id,
+            model_params=model_params,
+            turn_id=turn_id,
+        )
+    )
+
+
+def regenerate_sync(
+    store: RegenerableSession,
+    name: str,
+    input: Any,
+    session: LoomSession,
+    *,
+    replaces: str,
+    kind: str | None = None,
+    extras: dict[str, Any] | None = None,
+    agent_id: str | None = None,
+    model_params: dict[str, Any] | None = None,
+    turn_id: str | None = None,
+) -> AgentReply:
+    """Synchronous :func:`regenerate` — for a caller without an event loop (Lambda)."""
+    return _block_on(
+        regenerate(
+            store,
+            name,
+            input,
+            session,
+            replaces=replaces,
+            kind=kind,
             extras=extras,
             agent_id=agent_id,
             model_params=model_params,

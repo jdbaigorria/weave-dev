@@ -5,8 +5,51 @@ description: Rewind a conversation to a point and continue with a new input.
 
 # Fork
 
-One primitive behind **regenerate / edit / explore** (overwrite style, no compare):
-rewind a conversation to message `at` and continue with a new `input`.
+## Regenerate the last turn (`regenerate`)
+
+The common case — "try that answer again", or "edit my last message" — needs no
+positions. Name the turn by its [`turn_id`](chat-channel.md#the-turn-id):
+
+```python
+from weave import regenerate, S3SessionStore
+
+store = S3SessionStore("my-sessions-bucket", "session/")  # same bucket/prefix as app.yml
+
+reply = await regenerate(
+    store,
+    "assistant",
+    "the same question",      # or an edited one
+    session,
+    replaces=last.turn_id,    # the reply being overwritten
+)
+reply.turn_id                 # a new id: feedback on the old answer stays on the old answer
+```
+
+Weave finds where `replaces` starts (the user message stamped with it), truncates the
+history from there, rebuilds the agent and runs the input. Only the **last** turn can
+be regenerated; any other id is a `RequestError` (400) and nothing changes. The new
+turn always has a new id. Observers hear `operation="regenerate"` with `replaces`, and
+`EmfTurnObserver` counts it in `Regenerations` — a rejection signal even when the user
+never rates the answer.
+
+Over a channel, send `replaces` in the request and build the channel with a
+`session_store` (`chat_channel(..., session_store=store)`); without one, `replaces` is a
+400. Streaming a regeneration is not supported yet.
+
+The store implements [`RegenerableSession`](#mutablesession): `truncate` plus
+`turn_start`. `MutableFileSessionManager` (file sessions) and `S3SessionStore` (Loom's
+`s3` provider) ship with Weave. `S3SessionStore` is not a session manager: it reuses
+Strands' S3 key layout but never reads or creates a session, so one instance serves
+every `session_id`. Build it with the **same bucket and prefix** as `session.config` in
+`app.yml`.
+
+A regenerate is not a fork in the "new conversation" sense: it rewrites the same
+session. Branching into a new session is not built yet.
+
+## Rewind by position (`fork`)
+
+The lower-level primitive behind **regenerate / edit / explore** (overwrite style, no
+compare): rewind a conversation to message `at` and continue with a new `input`.
 
 - **regenerate** — `at` before the last exchange, same user message.
 - **edit K** — `at = K`, the edited message.
@@ -55,6 +98,15 @@ The capability the backend implements on top of its Strands `SessionManager`:
 class MutableSession(Protocol):
     def truncate(self, session_id: str, *, keep: int, agent_id: str) -> None:
         ...   # delete persisted messages so only the first `keep` remain
+```
+
+`regenerate` needs one more method, in its own protocol so a `fork`-only store keeps
+working:
+
+```python
+class RegenerableSession(MutableSession, Protocol):
+    def turn_start(self, session_id: str, *, agent_id: str, turn_id: str) -> int | None:
+        ...   # message_id opening turn_id, only if it is the last stamped turn
 ```
 
 `keep` may be negative (counted from the end, like a list slice): `-1` keeps all but

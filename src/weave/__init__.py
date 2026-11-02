@@ -30,6 +30,7 @@ from weave.adapters.driven.file_registry import FileConversationRegistry
 from weave.adapters.driven.local_assets import LocalAssetStore
 from weave.adapters.driven.mutable_file_session import MutableFileSessionManager
 from weave.adapters.driven.s3_assets import S3AssetStore
+from weave.adapters.driven.s3_session_store import S3SessionStore
 from weave.adapters.driving.assets import asset_router
 from weave.adapters.driving.chat import (
     ChatChannel,
@@ -64,6 +65,8 @@ from weave.composition import (
     fork_sync,
     labels_of,
     open_stream,
+    regenerate,
+    regenerate_sync,
     routed_channel,
     run,
     run_agent,
@@ -76,7 +79,7 @@ from weave.composition import (
 from weave.ports.assets import AssetRef, AssetStore, PresignedAssetStore
 from weave.ports.observer import TurnObserver
 from weave.ports.registry import ConversationRef, ConversationRegistry
-from weave.ports.session import MutableSession
+from weave.ports.session import MutableSession, RegenerableSession
 
 __version__ = "0.0.1"
 
@@ -109,11 +112,13 @@ __all__ = [
     "LocalAssetStore",
     "MutableFileSessionManager",
     "MutableSession",
+    "RegenerableSession",
     "PresignedAssetStore",
     "RequestError",
     "RoutingError",
     "SessionPolicy",
     "S3AssetStore",
+    "S3SessionStore",
     "StreamEvent",
     "TargetInfo",
     "TargetResolver",
@@ -137,6 +142,8 @@ __all__ = [
     "fork_stateless",
     "fork_stateless_sync",
     "fork_sync",
+    "regenerate",
+    "regenerate_sync",
     "header",
     "image_block",
     "labels_of",

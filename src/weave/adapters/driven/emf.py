@@ -45,7 +45,8 @@ class EmfTurnObserver:
     Metrics per turn: ``Turns`` (1), ``TurnErrors`` (0/1, emitted on every turn so the
     error rate has no gaps), ``TurnDuration`` and ``BuildDuration`` (whole ms), and on
     ``ok`` ``InputTokens``, ``OutputTokens``, ``TotalTokens``, ``CacheReadInputTokens``,
-    ``CacheWriteInputTokens`` and ``ToolCalls``. On Bedrock ``TotalTokens`` includes the
+    ``CacheWriteInputTokens`` and ``ToolCalls``; ``Regenerations`` (1) on a regenerated
+    turn. On Bedrock ``TotalTokens`` includes the
     cache tokens; for cost, price each of the four token metrics on its own.
     """
 
@@ -93,6 +94,9 @@ class EmfTurnObserver:
         ]
         if event.build_ms is not None:
             values.append(("BuildDuration", "Milliseconds", _whole_ms(event.build_ms)))
+        if event.operation == "regenerate":
+            # A rejection signal even when the user never touches the thumbs.
+            values.append(("Regenerations", "Count", 1))
         if event.outcome == "ok" and event.usage is not None:
             values += [
                 ("InputTokens", "Count", event.usage.input_tokens),

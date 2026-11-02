@@ -39,6 +39,7 @@ class ChatRequest(BaseModel):
     user_id: str | None = None  # omit → anonymous, session keyed by session_id
     extras: dict[str, Any] | None = None
     turn_id: str | None = None  # the caller's id for this turn; absent → Weave mints one
+    replaces: str | None = None  # overwrite this last turn (needs a session_store)
 ```
 
 When `user_id` is omitted the session is **anonymous** (keyed by `session_id`).
@@ -54,6 +55,10 @@ stamped in the persisted history on the user message that opened the turn (Stran
 
 Send a new id on every request, retries included: two turns with the same id cannot be
 told apart afterwards.
+
+A request with `replaces=<turn_id>` overwrites that turn instead of adding one —
+regenerate with the same message, or edit the last one with another. The channel needs
+a `session_store` for it (see [Fork](fork.md#regenerate-the-last-turn-regenerate)).
 
 ### Session policy (strict by default)
 

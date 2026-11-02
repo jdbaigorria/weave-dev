@@ -39,3 +39,23 @@ class MutableSession(Protocol):
             turns on a conversation (e.g. a per-``session_id`` lock or queue).
         """
         ...
+
+
+@runtime_checkable
+class RegenerableSession(MutableSession, Protocol):
+    """A :class:`MutableSession` that can also find where a turn starts (for ``regenerate``).
+
+    A separate capability so that a store written for ``fork`` keeps satisfying
+    :class:`MutableSession` unchanged.
+    """
+
+    def turn_start(self, session_id: str, *, agent_id: str, turn_id: str) -> int | None:
+        """``message_id`` of the user message that opened ``turn_id`` — only if it is the
+        **last** turn of ``agent_id``'s history.
+
+        Searches from the end for the first message stamped with a turn id
+        (``metadata.custom["weave.turn_id"]``): if it is ``turn_id``, returns its
+        ``message_id``; if it is another one, or there is none, ``None``. Searching from
+        the end keeps it cheap: the last turn is a few messages from the end.
+        """
+        ...

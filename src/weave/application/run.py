@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Any
 
 from loom import LoomSession, TargetInfo
 
-from weave.application.errors import HarnessError
+from weave.application.errors import HarnessError, RequestError
 from weave.application.observe import observe_turn
 from weave.application.reply import (
     AgentReply,
@@ -28,9 +28,9 @@ from weave.application.reply import (
     agent_reply_from_result,
     workflow_reply_from_result,
 )
-from weave.application.turn_id import mark_input, resolve_turn_id
+from weave.application.turn_id import mark_input, resolve_turn_id, valid_turn_id
 from weave.ports.agent_engine import AgentEngine
-from weave.ports.session import MutableSession
+from weave.ports.session import MutableSession, RegenerableSession
 
 if TYPE_CHECKING:
     from weave.ports.observer import TurnObserver
@@ -285,6 +285,92 @@ async def fork(
     return reply
 
 
+async def regenerate(
+    engine: AgentEngine,
+    store: RegenerableSession,
+    name: str,
+    input: Any,
+    session: LoomSession,
+    *,
+    replaces: str,
+    kind: str | None = None,
+    extras: dict[str, Any] | None = None,
+    agent_id: str | None = None,
+    model_params: dict[str, Any] | None = None,
+    observers: Sequence[TurnObserver] = (),
+    turn_id: str | None = None,
+) -> AgentReply:
+    """Overwrite the **last** turn ``replaces`` of a persisted conversation and run ``input``.
+
+    The same text regenerates the answer; another text edits the last message. The
+    caller only names the turn (its ``turn_id``); where it starts in the history is
+    found through the stamp W15 leaves on the opening user message.
+
+    1. ``replaces`` must be the session's last stamped turn of the agent, or this is a
+       :class:`~weave.application.errors.RequestError` (→ 400) and nothing changes.
+    2. The history is truncated from that message, the agent rebuilt and ``input`` run,
+       stamped with a **new** ``turn_id`` (equal to ``replaces`` is a ``RequestError``:
+       feedback on the old answer would point at the new one).
+
+    It is not a fork: it rewrites the same session. Observers hear
+    ``operation="regenerate"`` with ``replaces``; a rejected request is not a turn.
+    Only agents can be regenerated (``kind`` is looked up when omitted).
+
+    .. warning::
+
+        **Serialize calls per ``session_id``** — as :func:`fork`: two regenerations
+        racing on one session truncate it under each other.
+    """
+    turn_id = resolve_turn_id(turn_id)
+    if not valid_turn_id(replaces):
+        raise RequestError(f"invalid replaces {replaces!r}: expected a turn id.")
+    if turn_id == replaces:
+        raise RequestError("a regenerated turn needs a new turn_id, not the one it replaces.")
+    if not isinstance(store, RegenerableSession):
+        raise HarnessError(
+            "regenerate needs a session store implementing truncate and turn_start "
+            "(RegenerableSession)."
+        )
+    if (kind or _kind_of(engine, name)) != "agent":
+        raise RequestError(f"'{name}' is not an agent; only agent turns can be regenerated.")
+    resolved_id = agent_id or name
+    try:
+        start = store.turn_start(session.session_id, agent_id=resolved_id, turn_id=replaces)
+    except Exception as exc:  # noqa: BLE001 — re-raised as a typed harness error
+        raise HarnessError(f"regenerate of '{name}': could not read the session: {exc}") from exc
+    if start is None:
+        raise RequestError(f"turn {replaces!r} is not the last turn of this session.")
+
+    with observe_turn(
+        observers,
+        target=name,
+        kind="agent",
+        operation="regenerate",
+        session=session,
+        turn_id=turn_id,
+        replaces=replaces,
+    ) as turn:
+        _truncate(store, name, session, keep=start, agent_id=resolved_id)
+        agent = engine.build_agent(name, session, model_params=model_params)
+        turn.built()
+        _check_agent_id(agent, name, resolved_id)
+        try:
+            result = await agent.invoke_async(
+                mark_input(input, turn_id), invocation_state=extras or {}
+            )
+        except Exception as exc:  # noqa: BLE001 — re-raised as a typed harness error
+            raise HarnessError(f"regenerate of '{name}' failed during execution: {exc}") from exc
+        finally:
+            turn.describe(engine, agent)
+            agent.cleanup()
+
+        reply = agent_reply_from_result(
+            result, session, target=name, turn_id=turn_id, replaces=replaces
+        )
+        turn.done(reply)
+    return reply
+
+
 async def fork_stateless(
     engine: AgentEngine,
     name: str,
@@ -334,7 +420,7 @@ def _truncate(
         store.truncate(session.session_id, keep=keep, agent_id=agent_id)
     except Exception as exc:  # noqa: BLE001 — re-raised as a typed harness error
         raise HarnessError(
-            f"fork of '{name}': could not truncate session '{session.session_id}' "
+            f"rewind of '{name}': could not truncate session '{session.session_id}' "
             f"(agent_id={agent_id!r}): {exc}"
         ) from exc
 
@@ -350,7 +436,7 @@ def _check_agent_id(agent: Any, name: str, expected: str) -> None:
         return
     agent.cleanup()
     raise HarnessError(
-        f"fork of '{name}': truncated agent_id {expected!r} but the built agent persists "
+        f"rewind of '{name}': truncated agent_id {expected!r} but the built agent persists "
         f"as {actual!r}; pass agent_id={actual!r} if its YAML declares one."
     )
 

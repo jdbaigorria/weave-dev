@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import re
 import uuid
+from collections.abc import Iterable
 from typing import Any
 
 from weave.application.errors import RequestError
@@ -86,3 +87,16 @@ def _stamped(message: dict[str, Any], turn_id: str) -> dict[str, Any]:
     metadata = dict(message.get("metadata") or {})
     metadata["custom"] = {**(metadata.get("custom") or {}), TURN_ID_KEY: turn_id}
     return {**message, "metadata": metadata}
+
+
+def last_turn_start(messages_from_the_end: Iterable[Any], turn_id: str) -> int | None:
+    """``message_id`` of the message opening ``turn_id``, if it is the last stamped turn.
+
+    ``messages_from_the_end`` are Strands ``SessionMessage`` objects, newest first; it
+    stops at the first stamped one, so a lazy iterable reads only what it needs.
+    """
+    for session_message in messages_from_the_end:
+        stamped = turn_id_of(session_message.message)
+        if stamped is not None:
+            return session_message.message_id if stamped == turn_id else None
+    return None

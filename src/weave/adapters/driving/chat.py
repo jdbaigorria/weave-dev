@@ -36,11 +36,14 @@ if TYPE_CHECKING:
     from fastapi import APIRouter
 
     from weave.ports.registry import ConversationRegistry
+    from weave.ports.session import RegenerableSession
 
 # A use case already bound to an engine: ``run(name, input, session, *, kind, extras, turn_id)``.
 Runner = Callable[..., Awaitable[AgentReply | WorkflowReply]]
 # Its token-streaming sibling: ``stream_agent(name, input, session, *, extras, turn_id)``.
 Streamer = Callable[..., AsyncIterator[ChatStreamEvent]]
+# Overwrites the last turn: ``regenerate(store, name, input, session, *, replaces, ...)``.
+Regenerator = Callable[..., Awaitable[AgentReply]]
 
 
 class ChatRequest(BaseModel):
@@ -55,7 +58,8 @@ class ChatRequest(BaseModel):
 
     ``turn_id`` is the caller's id for this turn (e.g. the frontend's message id): 1–64
     of ``[A-Za-z0-9_-]``, or omitted for Weave to mint one. Either way the reply
-    carries it.
+    carries it. ``replaces`` names the last turn to overwrite (regenerate, or edit the
+    last message); the channel needs a ``session_store`` for it.
     """
 
     message: str | list[Any]
@@ -63,6 +67,7 @@ class ChatRequest(BaseModel):
     user_id: str | None = None
     extras: dict[str, Any] | None = Field(default=None)
     turn_id: str | None = None
+    replaces: str | None = None
 
 
 # A pre-agent entrypoint: pick which target a request runs against. The product
@@ -131,6 +136,8 @@ class ChatChannel:
         registry: ConversationRegistry | None = None,
         kind: str | None = None,
         session_policy: SessionPolicy | None = None,
+        session_store: RegenerableSession | None = None,
+        regenerator: Regenerator | None = None,
     ) -> None:
         # A bare name becomes a constant resolver; a callable routes per request.
         self._resolve: TargetResolver = target if callable(target) else (lambda _req: target)
@@ -140,6 +147,8 @@ class ChatChannel:
         self._kind = kind
         # Strict by default: a missing session_id is a 400, not a silent new session.
         self._session_policy: SessionPolicy = session_policy or _strict_session
+        self._session_store = session_store
+        self._regenerator = regenerator
 
     async def handle(self, request: ChatRequest) -> AgentReply | WorkflowReply:
         """Run one turn for ``request`` and return the harness reply.
@@ -156,10 +165,28 @@ class ChatChannel:
         session = self._session(request)
         logger.debug("chat turn → target %r (session=%s)", name, session.session_id)
         self._record(session)
+        if request.replaces is not None:
+            return await self._regenerate(name, request, session)
         return await self._runner(
             name,
             request.message,
             session,
+            kind=self._kind,
+            extras=request.extras,
+            **_turn_kwargs(request),
+        )
+
+    async def _regenerate(
+        self, name: str, request: ChatRequest, session: LoomSession
+    ) -> AgentReply:
+        if self._session_store is None or self._regenerator is None:
+            raise RequestError("this channel cannot regenerate: it has no session_store.")
+        return await self._regenerator(
+            self._session_store,
+            name,
+            request.message,
+            session,
+            replaces=request.replaces,
             kind=self._kind,
             extras=request.extras,
             **_turn_kwargs(request),
@@ -191,6 +218,8 @@ class ChatChannel:
                 "this channel has no streamer; build it via chat_channel() to stream, "
                 "or use handle() for a one-shot reply."
             )
+        if request.replaces is not None:
+            raise RequestError("regenerating a turn is not supported over a stream yet.")
         name = self._resolve(request)
         session = self._session(request)
         logger.debug("chat stream → target %r (session=%s)", name, session.session_id)
