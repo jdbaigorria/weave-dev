@@ -30,6 +30,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 Outcome = Literal["ok", "error", "cancelled"]
+Operation = Literal["run", "stream", "fork", "regenerate"]
 
 
 class AgentDescription(BaseModel):
@@ -54,13 +55,15 @@ class TurnEvent(BaseModel):
     ``usage.latency_ms`` (what Strands measured inside the agent) to see what rebuilding
     the agent per request costs. ``build_ms`` is ``None`` when the build did not finish.
     ``usage`` and ``stop_reason`` are set only on ``ok``; ``error`` only on ``error``.
+    ``turn_id`` is set on every outcome (the id exists before the build); ``replaces``
+    only on a ``regenerate``.
     """
 
     model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
 
     target: str
     kind: Literal["agent", "workflow"]
-    operation: Literal["run", "stream", "fork"]
+    operation: Operation
     session_id: str
     user_id: str
     is_anonymous: bool
@@ -74,6 +77,8 @@ class TurnEvent(BaseModel):
     model_settings: ModelSettings | None = None
     model_fallbacks: int = 0
     variant: str | None = None
+    turn_id: str | None = None
+    replaces: str | None = None
 
     @property
     def error_type(self) -> str | None:
@@ -97,6 +102,8 @@ class TurnClock:
         self.build_ms: float | None = None
         self.reply: Any = None
         self.description: AgentDescription | None = None
+        self.turn_id: str | None = None
+        self.replaces: str | None = None
 
     def built(self) -> None:
         """Mark the end of the build."""
@@ -130,8 +137,10 @@ def observe_turn(
     *,
     target: str,
     kind: Literal["agent", "workflow"],
-    operation: Literal["run", "stream", "fork"],
+    operation: Operation,
     session: LoomSession,
+    turn_id: str | None = None,
+    replaces: str | None = None,
 ) -> Iterator[TurnClock]:
     """Time one turn and tell ``observers`` how it ended. Re-raises whatever the turn raised.
 
@@ -140,6 +149,8 @@ def observe_turn(
     after it, the turn already answered and stays ``ok``.
     """
     clock = TurnClock(active=bool(observers))
+    clock.turn_id = turn_id
+    clock.replaces = replaces
     try:
         yield clock
     except BaseException as exc:
@@ -162,7 +173,7 @@ def _event(
     outcome: Outcome,
     target: str,
     kind: Literal["agent", "workflow"],
-    operation: Literal["run", "stream", "fork"],
+    operation: Operation,
     session: LoomSession,
     *,
     error: BaseException | None = None,
@@ -186,6 +197,8 @@ def _event(
         model_settings=description.model_settings,
         model_fallbacks=description.model_fallbacks,
         variant=description.variant,
+        turn_id=clock.turn_id,
+        replaces=clock.replaces,
     )
 
 

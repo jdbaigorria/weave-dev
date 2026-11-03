@@ -44,6 +44,7 @@ nav:
       - Chat channel: chat-channel.md
       - Streaming: streaming.md
       - Fork (edit / regenerate): fork.md
+      - User feedback: feedback.md
       - Input shaping: content.md
       - Config source (DynamoDB): config-source.md
       - Conversation registry: conversations.md

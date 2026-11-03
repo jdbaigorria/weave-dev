@@ -101,8 +101,9 @@ An observer receives a frozen `TurnEvent`:
 
 | Field | Meaning |
 | --- | --- |
-| `target`, `kind`, `operation` | what ran (`agent` / `workflow`; `run` / `stream` / `fork`) |
+| `target`, `kind`, `operation` | what ran (`agent` / `workflow`; `run` / `stream` / `fork` / `regenerate`) |
 | `session_id`, `user_id`, `is_anonymous` | the effective identity (after the session policy) |
+| `turn_id`, `replaces` | the turn's id (on every outcome) and, on a `regenerate`, the turn it overwrote |
 | `outcome` | `ok`, `error`, or `cancelled` (a stream closed before `done`, or a cancelled task) |
 | `duration_ms` | the use case's wall clock, **build included** |
 | `build_ms` | time to build the agent; `None` if the build failed |
@@ -132,6 +133,9 @@ line per turn to stdout. CloudWatch Logs turns it into metrics: no API call, no
 | `BuildDuration` | Milliseconds (whole) | when the build finished |
 | `InputTokens`, `OutputTokens`, `TotalTokens`, `ToolCalls` | Count | `ok` |
 | `CacheReadInputTokens`, `CacheWriteInputTokens` | Count | `ok` (0 without prompt caching) |
+| `Regenerations` | Count (1) | a `regenerate` turn |
+
+The same observer counts [user feedback](feedback.md#metrics) (`on_feedback`) under the same dimensions.
 
 On Bedrock `TotalTokens` includes the prompt-cache reads and writes, and each kind is
 priced differently. For cost, multiply `InputTokens`, `CacheReadInputTokens`,
@@ -146,10 +150,17 @@ tokens and cost per model, and per experiment variant, next to the per-target vi
 Turn them off with `model_dimension=False` / `variant_dimension=False`; each extra set is
 one more series per metric. `model_config` (the whitelisted settings) and
 `model_fallbacks` travel as properties.
- `session_id`, `user_id`, `kind`,
+ `session_id`, `user_id`, `turn_id`, `replaces`, `kind`,
 `operation`, `outcome`, `stop_reason` and `error_type` travel as properties — searchable
 in Logs Insights, never dimensions (each combination is billed as a metric). Override
 either with `dimensions=lambda e: {...}` / `properties=lambda e: {...}`.
+
+To look at one turn — say, one a user rated — filter by its id in Logs Insights:
+
+```
+fields @timestamp, target, outcome, TurnDuration, model, error_type
+| filter turn_id = "…"
+```
 
 ### Your own observer
 

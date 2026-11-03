@@ -288,7 +288,7 @@ Implement this protocol when your own Strands session store can truncate history
 from weave import MutableSession
 
 class MySessionStore:
-    def truncate(self, session_id: str, *, keep: int, agent_id: str = "default") -> None:
+    def truncate(self, session_id: str, *, keep: int, agent_id: str) -> None:
         delete_messages_after(session_id, keep=keep, agent_id=agent_id)
 
 store: MutableSession = MySessionStore()

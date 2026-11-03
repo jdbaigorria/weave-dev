@@ -25,7 +25,7 @@ handler = lambda_handler(chat_channel("assistant"))
 ```
 
 The request body maps to a [`ChatRequest`](chat-channel.md) (`message`, `session_id`,
-optional `user_id`/`extras`); the response `body` is the serialized `AgentReply` /
+optional `user_id`/`extras`/`turn_id`); the response `body` is the serialized `AgentReply` /
 `WorkflowReply` (the `raw` escape hatch is excluded). One handler serves one target —
 mount several for several agents, or route within one (below).
 
@@ -174,6 +174,8 @@ app.include_router(asset_router(S3AssetStore("my-bucket")))
 ```
 
 ## Notes
+
+- **User feedback** on the same function: [`lambda_feedback_handler`](feedback.md), picked by path.
 
 - **`session_id` persistence** needs a durable `session_manager` in Loom
   (DynamoDB/S3) — Lambda's filesystem is ephemeral, so without it every invocation

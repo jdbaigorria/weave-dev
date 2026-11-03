@@ -14,11 +14,16 @@ import os
 
 from strands.session import FileSessionManager
 
+from weave.application.turn_id import last_turn_start
+
 
 class MutableFileSessionManager(FileSessionManager):
-    """``FileSessionManager`` plus ``truncate`` — implements :class:`weave.ports.session.MutableSession`."""
+    """``FileSessionManager`` plus ``truncate`` and ``turn_start``.
 
-    def truncate(self, session_id: str, *, keep: int, agent_id: str = "default") -> None:
+    Implements :class:`weave.ports.session.RegenerableSession`.
+    """
+
+    def truncate(self, session_id: str, *, keep: int, agent_id: str) -> None:
         """Delete persisted messages with id >= the cutoff (keep the first ``keep``).
 
         ``keep`` may be negative (counted from the end). Operates on the on-disk
@@ -34,3 +39,10 @@ class MutableFileSessionManager(FileSessionManager):
                 path = self._get_message_path(session_id, agent_id, session_message.message_id)
                 if os.path.exists(path):
                     os.remove(path)
+
+    def turn_start(self, session_id: str, *, agent_id: str, turn_id: str) -> int | None:
+        """Index of the message opening ``turn_id`` if it is the last stamped turn.
+
+        Implements :class:`weave.ports.session.RegenerableSession`.
+        """
+        return last_turn_start(reversed(self.list_messages(session_id, agent_id)), turn_id)

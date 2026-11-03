@@ -27,19 +27,33 @@ from loom.errors import LoomError
 from pydantic import BaseModel, Field
 
 from weave.application.errors import HarnessError, RequestError, RoutingError
+from weave.application.feedback import (
+    Feedback,
+    FeedbackPolicy,
+    FeedbackRecord,
+    PolicyFor,
+    submit_feedback,
+)
 from weave.application.reply import AgentReply, ChatStreamEvent, WorkflowReply
+from weave.application.turn_id import resolve_turn_id
 
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from fastapi import APIRouter
 
+    from weave.ports.feedback import FeedbackStore
     from weave.ports.registry import ConversationRegistry
+    from weave.ports.session import RegenerableSession
 
-# A use case already bound to an engine: ``run(name, input, session, *, kind, extras)``.
+# A use case already bound to an engine: ``run(name, input, session, *, kind, extras, turn_id)``.
 Runner = Callable[..., Awaitable[AgentReply | WorkflowReply]]
-# Its token-streaming sibling: ``stream_agent(name, input, session, *, extras)``.
+# Its token-streaming sibling: ``stream_agent(name, input, session, *, extras, turn_id)``.
 Streamer = Callable[..., AsyncIterator[ChatStreamEvent]]
+# Overwrites the last turn: ``regenerate(store, name, input, session, *, replaces, ...)``.
+Regenerator = Callable[..., Awaitable[AgentReply]]
+# Stores a feedback: ``submit_feedback(store, feedback, *, target, session, policy)``.
+FeedbackSubmitter = Callable[..., FeedbackRecord]
 
 
 class ChatRequest(BaseModel):
@@ -51,12 +65,19 @@ class ChatRequest(BaseModel):
     absent is the channel's :data:`SessionPolicy`: the default (:func:`require`) is
     strict and raises :class:`~weave.application.errors.RequestError` (→ 400), while
     :func:`~weave.adapters.driving.identity.mint_if_absent` generates one.
+
+    ``turn_id`` is the caller's id for this turn (e.g. the frontend's message id): 1–64
+    of ``[A-Za-z0-9_-]``, or omitted for Weave to mint one. Either way the reply
+    carries it. ``replaces`` names the last turn to overwrite (regenerate, or edit the
+    last message); the channel needs a ``session_store`` for it.
     """
 
     message: str | list[Any]
     session_id: str | None = None
     user_id: str | None = None
     extras: dict[str, Any] | None = Field(default=None)
+    turn_id: str | None = None
+    replaces: str | None = None
 
 
 # A pre-agent entrypoint: pick which target a request runs against. The product
@@ -125,6 +146,11 @@ class ChatChannel:
         registry: ConversationRegistry | None = None,
         kind: str | None = None,
         session_policy: SessionPolicy | None = None,
+        session_store: RegenerableSession | None = None,
+        regenerator: Regenerator | None = None,
+        feedback_store: FeedbackStore | None = None,
+        feedback_policy: FeedbackPolicy | PolicyFor | None = None,
+        feedback_submitter: FeedbackSubmitter | None = None,
     ) -> None:
         # A bare name becomes a constant resolver; a callable routes per request.
         self._resolve: TargetResolver = target if callable(target) else (lambda _req: target)
@@ -134,6 +160,11 @@ class ChatChannel:
         self._kind = kind
         # Strict by default: a missing session_id is a 400, not a silent new session.
         self._session_policy: SessionPolicy = session_policy or _strict_session
+        self._session_store = session_store
+        self._regenerator = regenerator
+        self._feedback_store = feedback_store
+        self._feedback_policy = feedback_policy
+        self._submit_feedback: FeedbackSubmitter = feedback_submitter or submit_feedback
 
     async def handle(self, request: ChatRequest) -> AgentReply | WorkflowReply:
         """Run one turn for ``request`` and return the harness reply.
@@ -150,13 +181,74 @@ class ChatChannel:
         session = self._session(request)
         logger.debug("chat turn → target %r (session=%s)", name, session.session_id)
         self._record(session)
+        if request.replaces is not None:
+            return await self._regenerate(name, request, session)
         return await self._runner(
             name,
             request.message,
             session,
             kind=self._kind,
             extras=request.extras,
+            **_turn_kwargs(request),
         )
+
+    async def _regenerate(
+        self, name: str, request: ChatRequest, session: LoomSession
+    ) -> AgentReply:
+        if self._session_store is None or self._regenerator is None:
+            raise RequestError("this channel cannot regenerate: it has no session_store.")
+        return await self._regenerator(
+            self._session_store,
+            name,
+            request.message,
+            session,
+            replaces=request.replaces,
+            kind=self._kind,
+            extras=request.extras,
+            **_turn_kwargs(request),
+        )
+
+    def feedback_options(self, extras: dict[str, Any] | None = None) -> tuple[str, FeedbackPolicy]:
+        """``(target, policy)`` for a request with these ``extras`` — what a UI needs to
+        build its feedback panel. Routed like the chat, so it needs no agent name and no
+        session.
+        """
+        name = self._resolve(ChatRequest(message="", extras=extras))
+        return name, self._policy_for(name)
+
+    def feedback(self, feedback: Feedback) -> FeedbackRecord:
+        """Store a user's rating of one turn and tell the feedback observers what changed.
+
+        The target is resolved like the chat (same ``extras``), unless the turn was
+        already rated, which keeps its first target. ``session_id`` is always required —
+        a feedback without a session has no turn to refer to — and the identity comes
+        from the channel's session policy, so it matches the chat's. The turn is not
+        looked up in the history: a feedback on an unknown turn is stored and crosses
+        with nothing.
+        """
+        if self._feedback_store is None:
+            raise RequestError("this channel does not accept feedback: it has no feedback_store.")
+        request = ChatRequest(
+            message="",
+            session_id=feedback.session_id,
+            user_id=feedback.user_id,
+            extras=feedback.extras,
+        )
+        name = self._resolve(request)
+        session = self._session(request)
+        return self._submit_feedback(
+            self._feedback_store,
+            feedback,
+            target=name,
+            session=session,
+            policy=self._policy_for(name),
+        )
+
+    def _policy_for(self, name: str) -> FeedbackPolicy:
+        policy = self._feedback_policy
+        if policy is None:
+            return FeedbackPolicy()
+        return policy if isinstance(policy, FeedbackPolicy) else policy(name)
 
     def handle_sync(self, request: ChatRequest) -> AgentReply | WorkflowReply:
         """Synchronous :meth:`handle` — for a caller without an event loop (Lambda).
@@ -184,11 +276,14 @@ class ChatChannel:
                 "this channel has no streamer; build it via chat_channel() to stream, "
                 "or use handle() for a one-shot reply."
             )
+        if request.replaces is not None:
+            raise RequestError("regenerating a turn is not supported over a stream yet.")
         name = self._resolve(request)
         session = self._session(request)
         logger.debug("chat stream → target %r (session=%s)", name, session.session_id)
         self._record(session)
-        return self._streamer(name, request.message, session, extras=request.extras)
+        kwargs = _turn_kwargs(request)  # a malformed id is a 400 before the stream opens
+        return self._streamer(name, request.message, session, extras=request.extras, **kwargs)
 
     def _session(self, request: ChatRequest) -> LoomSession:
         """Build the run's identity by applying the channel's :data:`SessionPolicy`."""
@@ -198,6 +293,17 @@ class ChatChannel:
         """Upsert the (effective) conversation into the registry (skip anonymous)."""
         if self._registry is not None and not session.is_anonymous:
             self._registry.record(session.user_id, session.session_id)
+
+
+def _turn_kwargs(request: ChatRequest) -> dict[str, Any]:
+    """``turn_id`` for the runner, only when the caller sent one (validated here).
+
+    Without one the use case mints it, so a runner written before ``turn_id`` existed
+    keeps working.
+    """
+    if request.turn_id is None:
+        return {}
+    return {"turn_id": resolve_turn_id(request.turn_id)}
 
 
 def chat_router(

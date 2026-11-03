@@ -35,6 +35,7 @@ from pydantic import BaseModel
 
 from weave.adapters.driving.chat import ChatChannel, ChatRequest
 from weave.application.errors import HarnessError, RequestError, RoutingError
+from weave.application.feedback import Feedback, FeedbackPolicy, FeedbackRecord
 from weave.application.reply import AgentReply, WorkflowReply
 
 logger = logging.getLogger(__name__)
@@ -201,29 +202,7 @@ def lambda_handler(
     from weave.composition import _block_on
 
     parse_event: Parser = parse or _default_parse
-    custom = dict(errors or {})
-    extra_headers = dict(headers or {})
-    overridden = {name.lower() for name in extra_headers}
-    response_headers = {
-        **{k: v for k, v in _HEADERS.items() if k.lower() not in overridden},
-        **extra_headers,
-    }
-
-    def respond(status: int, body: str) -> dict[str, Any]:
-        return {"statusCode": status, "headers": dict(response_headers), "body": body}
-
-    def fail(exc: Exception, request: ChatRequest | None, *, parsing: bool) -> dict[str, Any]:
-        session_id = request.session_id if request is not None else None
-        try:
-            mapper = _custom_mapper(custom, exc)
-            if mapper is not None:
-                status, body = mapper(exc, request)
-            else:
-                status, body = _default_error(exc, parsing=parsing, session_id=session_id)
-            return respond(status, _serialize(body))
-        except Exception:  # noqa: BLE001 — a broken error mapper must not crash the Lambda
-            logger.exception("error mapper failed (session=%s)", session_id)
-            return respond(500, json.dumps({"error": "internal error"}))
+    respond, fail = _responder(errors, headers)
 
     def handler(event: dict[str, Any], context: Any = None) -> dict[str, Any]:
         try:
@@ -237,6 +216,121 @@ def lambda_handler(
         except Exception as exc:  # noqa: BLE001 — mapped by ``fail``; never leak a traceback
             return fail(exc, request, parsing=False)
 
+        return respond(200, body)
+
+    return handler
+
+
+def _responder(
+    errors: Mapping[type[BaseException], ErrorMapper] | None,
+    headers: Mapping[str, str] | None,
+) -> tuple[Callable[[int, str], dict[str, Any]], Callable[..., dict[str, Any]]]:
+    """``(respond, fail)`` shared by the handlers: same headers, same error mapping."""
+    custom = dict(errors or {})
+    extra_headers = dict(headers or {})
+    overridden = {name.lower() for name in extra_headers}
+    response_headers = {
+        **{k: v for k, v in _HEADERS.items() if k.lower() not in overridden},
+        **extra_headers,
+    }
+
+    def respond(status: int, body: str) -> dict[str, Any]:
+        return {"statusCode": status, "headers": dict(response_headers), "body": body}
+
+    def fail(exc: Exception, request: Any, *, parsing: bool) -> dict[str, Any]:
+        session_id = getattr(request, "session_id", None)
+        try:
+            mapper = _custom_mapper(custom, exc)
+            if mapper is not None:
+                status, body = mapper(exc, request)
+            else:
+                status, body = _default_error(exc, parsing=parsing, session_id=session_id)
+            return respond(status, _serialize(body))
+        except Exception:  # noqa: BLE001 — a broken error mapper must not crash the Lambda
+            logger.exception("error mapper failed (session=%s)", session_id)
+            return respond(500, json.dumps({"error": "internal error"}))
+
+    return respond, fail
+
+
+def _method(event: dict[str, Any]) -> str:
+    """HTTP method of an API Gateway event: HTTP API (v2) or REST (v1)."""
+    http = (event.get("requestContext") or {}).get("http") or {}
+    return str(http.get("method") or event.get("httpMethod") or "POST").upper()
+
+
+def _default_parse_feedback(event: dict[str, Any]) -> Feedback:
+    body = decode_body(event)
+    if not isinstance(body, dict):
+        raise TypeError("the feedback body must be a JSON object.")
+    return Feedback(**body)
+
+
+def _default_render_feedback(record: FeedbackRecord, feedback: Feedback) -> dict[str, Any]:
+    return {"turn_id": record.turn_id, "rating": record.rating, "issues": list(record.issues)}
+
+
+def _default_render_options(target: str, policy: FeedbackPolicy) -> dict[str, Any]:
+    return {
+        "target": target,
+        "issue_types": [issue.model_dump() for issue in policy.issue_types],
+        "max_comment": policy.max_comment,
+    }
+
+
+def lambda_feedback_handler(
+    channel: ChatChannel,
+    *,
+    parse: Callable[[dict[str, Any]], Feedback] | None = None,
+    render: Callable[[FeedbackRecord, Feedback], Any] | None = None,
+    parse_options: Callable[[dict[str, Any]], dict[str, Any] | None] | None = None,
+    render_options: Callable[[str, FeedbackPolicy], Any] | None = None,
+    errors: Mapping[type[BaseException], ErrorMapper] | None = None,
+    headers: Mapping[str, str] | None = None,
+) -> Callable[[dict[str, Any], Any], dict[str, Any]]:
+    """Return an AWS Lambda handler for user feedback on ``channel``'s turns.
+
+    - ``POST``: ``parse(event) -> Feedback`` (default: the JSON body as
+      :class:`~weave.application.feedback.Feedback`), stored through
+      :meth:`ChatChannel.feedback`; 200 with ``render(record, feedback)`` (default
+      ``{"turn_id", "rating", "issues"}``).
+    - ``GET``: the feedback panel for the request's target —
+      ``parse_options(event) -> extras`` (default ``None``: an unrouted channel needs
+      none; a routed one passes what its resolver reads, e.g. the headers) and
+      ``render_options(target, policy)`` (default ``{"target", "issue_types",
+      "max_comment"}``).
+    - Any other method → 405.
+
+    ``errors`` and ``headers`` work as in :func:`lambda_handler`, with the same default
+    mapping (a malformed body, a missing ``session_id`` or a bad ``turn_id`` → 400).
+    Weave does not route by path: a function serving chat and feedback picks the
+    handler from ``event["rawPath"]`` (HTTP API) or ``event["resource"]`` (REST).
+    """
+    parse_feedback = parse or _default_parse_feedback
+    render_feedback = render or _default_render_feedback
+    options_extras = parse_options or (lambda event: None)
+    shape_options = render_options or _default_render_options
+    respond, fail = _responder(errors, headers)
+
+    def handler(event: dict[str, Any], context: Any = None) -> dict[str, Any]:
+        method = _method(event)
+        if method == "GET":
+            try:
+                target, policy = channel.feedback_options(options_extras(event))
+                return respond(200, _serialize(shape_options(target, policy)))
+            except Exception as exc:  # noqa: BLE001 — mapped by ``fail``
+                return fail(exc, None, parsing=False)
+        if method != "POST":
+            return respond(405, json.dumps({"error": f"method {method} not allowed"}))
+        try:
+            feedback = parse_feedback(event)
+        except Exception as exc:  # noqa: BLE001 — mapped by ``fail``
+            return fail(exc, None, parsing=True)
+        try:
+            record = channel.feedback(feedback)
+            body = _serialize(render_feedback(record, feedback))
+        except Exception as exc:  # noqa: BLE001 — mapped by ``fail``
+            return fail(exc, feedback, parsing=False)
         return respond(200, body)
 
     return handler

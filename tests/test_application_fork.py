@@ -40,7 +40,9 @@ class _FakeAgent:
         self.invoked_with = {"prompt": prompt, "invocation_state": invocation_state}
         if self._fail:
             raise RuntimeError("boom")
-        self.messages.append({"role": "user", "content": prompt})
+        # Weave hands the input over as stamped messages (W15); keep the transcript flat.
+        user = prompt[0] if isinstance(prompt, list) else {"role": "user", "content": prompt}
+        self.messages.append({"role": "user", "content": user["content"][0]["text"]})
         self.messages.append(
             {"role": "assistant", "content": self._result.message["content"][0]["text"]}
         )

@@ -18,19 +18,22 @@ from loom import LoomSession, TargetInfo
 
 from weave.adapters.driven.loom_engine import LoomAgentEngine
 from weave.adapters.driving.chat import ChatChannel, SessionPolicy, TargetResolver
+from weave.application import feedback as _feedback
 from weave.application import run as _run
 from weave.application import stream as _stream
 from weave.application.errors import HarnessError
+from weave.application.feedback import Feedback, FeedbackPolicy, FeedbackRecord, PolicyFor
 from weave.application.reply import AgentReply, ChatStreamEvent, WorkflowReply
 from weave.application.stream import BidiStream
 from weave.ports.registry import ConversationRegistry
-from weave.ports.session import MutableSession
+from weave.ports.session import MutableSession, RegenerableSession
 
 if TYPE_CHECKING:
     from loom.ports import ConfigSource
 
     from weave.ports.agent_engine import AgentEngine
-    from weave.ports.observer import TurnObserver
+    from weave.ports.feedback import FeedbackStore
+    from weave.ports.observer import FeedbackObserver, TurnObserver
 
 _T = TypeVar("_T")
 
@@ -39,15 +42,17 @@ logger = logging.getLogger(__name__)
 # Default engine: Loom over the filesystem workspace. The wired top-level functions
 # read this at call time, so configure() (below) can swap it once at startup.
 _engine: AgentEngine = LoomAgentEngine()
-# Turn observers (metrics, audit). Same lifecycle as the engine: fixed by configure().
+# Turn and feedback observers (metrics, audit). Same lifecycle as the engine: fixed by
+# configure(), which hands each list the observers that have its method.
 _observers: tuple[TurnObserver, ...] = ()
+_feedback_observers: tuple[FeedbackObserver, ...] = ()
 
 
 def configure(
     *,
     source: ConfigSource | None = None,
     engine: AgentEngine | None = None,
-    observers: Sequence[TurnObserver] = (),
+    observers: Sequence[TurnObserver | FeedbackObserver] = (),
 ) -> None:
     """Set the engine and turn observers the wired top-level functions use — the composition root.
 
@@ -71,15 +76,25 @@ def configure(
 
         weave.configure(observers=[EmfTurnObserver("Acme/Agents")])
 
+    An observer with ``on_feedback`` also hears every feedback request submitted through
+    a channel (:meth:`~weave.adapters.driving.chat.ChatChannel.feedback`); one may have
+    both methods (``EmfTurnObserver`` does).
+
     ``configure`` fixes **all** the wiring at once: calling it without ``observers``
     removes the ones set before.
     """
-    global _engine, _observers
+    global _engine, _observers, _feedback_observers
     if source is not None and engine is not None:
         raise HarnessError("configure() takes either source or engine, not both.")
     _engine = engine if engine is not None else LoomAgentEngine(source=source)
-    _observers = tuple(observers)
-    logger.info("engine configured: %s (observers=%d)", type(_engine).__name__, len(_observers))
+    _observers = tuple(o for o in observers if callable(getattr(o, "on_turn", None)))
+    _feedback_observers = tuple(o for o in observers if callable(getattr(o, "on_feedback", None)))
+    logger.info(
+        "engine configured: %s (observers=%d, feedback observers=%d)",
+        type(_engine).__name__,
+        len(_observers),
+        len(_feedback_observers),
+    )
 
 
 async def run_agent(
@@ -89,6 +104,7 @@ async def run_agent(
     *,
     extras: dict[str, Any] | None = None,
     model_params: dict[str, Any] | None = None,
+    turn_id: str | None = None,
 ) -> AgentReply:
     """Run agent ``name`` for one turn using the default (Loom) engine.
 
@@ -107,6 +123,7 @@ async def run_agent(
         extras=extras,
         model_params=model_params,
         observers=_observers,
+        turn_id=turn_id,
     )
 
 
@@ -117,6 +134,7 @@ def stream_agent(
     *,
     extras: dict[str, Any] | None = None,
     model_params: dict[str, Any] | None = None,
+    turn_id: str | None = None,
 ) -> AsyncIterator[ChatStreamEvent]:
     """Token-stream agent ``name`` for one turn using the default (Loom) engine.
 
@@ -134,6 +152,7 @@ def stream_agent(
         extras=extras,
         model_params=model_params,
         observers=_observers,
+        turn_id=turn_id,
     )
 
 
@@ -144,6 +163,7 @@ async def run_workflow(
     *,
     extras: dict[str, Any] | None = None,
     model_params: dict[str, Any] | None = None,
+    turn_id: str | None = None,
 ) -> WorkflowReply:
     """Run multi-agent workflow ``name`` for one turn using the default (Loom) engine.
 
@@ -157,6 +177,7 @@ async def run_workflow(
         extras=extras,
         model_params=model_params,
         observers=_observers,
+        turn_id=turn_id,
     )
 
 
@@ -183,8 +204,9 @@ async def fork(
     *,
     at: int,
     extras: dict[str, Any] | None = None,
-    agent_id: str = "default",
+    agent_id: str | None = None,
     model_params: dict[str, Any] | None = None,
+    turn_id: str | None = None,
 ) -> AgentReply:
     """Rewind a persisted conversation to ``at`` and continue (regenerate/edit/explore).
 
@@ -203,6 +225,42 @@ async def fork(
         agent_id=agent_id,
         model_params=model_params,
         observers=_observers,
+        turn_id=turn_id,
+    )
+
+
+async def regenerate(
+    store: RegenerableSession,
+    name: str,
+    input: Any,
+    session: LoomSession,
+    *,
+    replaces: str,
+    kind: str | None = None,
+    extras: dict[str, Any] | None = None,
+    agent_id: str | None = None,
+    model_params: dict[str, Any] | None = None,
+    turn_id: str | None = None,
+) -> AgentReply:
+    """Overwrite the last turn ``replaces`` and run ``input`` (default Loom engine).
+
+    See :func:`weave.application.run.regenerate`. ``store`` rewinds the same storage
+    Loom's session uses (:class:`~weave.adapters.driven.mutable_file_session.MutableFileSessionManager`
+    or :class:`~weave.adapters.driven.s3_session_store.S3SessionStore`).
+    """
+    return await _run.regenerate(
+        _engine,
+        store,
+        name,
+        input,
+        session,
+        replaces=replaces,
+        kind=kind,
+        extras=extras,
+        agent_id=agent_id,
+        model_params=model_params,
+        observers=_observers,
+        turn_id=turn_id,
     )
 
 
@@ -215,6 +273,7 @@ async def fork_stateless(
     at: int | None = None,
     extras: dict[str, Any] | None = None,
     model_params: dict[str, Any] | None = None,
+    turn_id: str | None = None,
 ) -> tuple[AgentReply, list[Any]]:
     """Stateless fork: caller owns the transcript; returns ``(reply, new_transcript)``."""
     return await _run.fork_stateless(
@@ -227,6 +286,7 @@ async def fork_stateless(
         extras=extras,
         model_params=model_params,
         observers=_observers,
+        turn_id=turn_id,
     )
 
 
@@ -258,6 +318,7 @@ async def run(
     kind: str | None = None,
     extras: dict[str, Any] | None = None,
     model_params: dict[str, Any] | None = None,
+    turn_id: str | None = None,
 ) -> AgentReply | WorkflowReply:
     """Run ``name`` one-shot, dispatching by kind (default Loom engine)."""
     return await _run.run(
@@ -269,6 +330,26 @@ async def run(
         extras=extras,
         model_params=model_params,
         observers=_observers,
+        turn_id=turn_id,
+    )
+
+
+def submit_feedback(
+    store: FeedbackStore,
+    feedback: Feedback,
+    *,
+    target: str,
+    session: LoomSession,
+    policy: FeedbackPolicy,
+) -> FeedbackRecord:
+    """:func:`weave.application.feedback.submit_feedback` with the configured observers."""
+    return _feedback.submit_feedback(
+        store,
+        feedback,
+        target=target,
+        session=session,
+        policy=policy,
+        observers=_feedback_observers,
     )
 
 
@@ -278,6 +359,9 @@ def chat_channel(
     kind: str | None = None,
     registry: ConversationRegistry | None = None,
     session_policy: SessionPolicy | None = None,
+    session_store: RegenerableSession | None = None,
+    feedback_store: FeedbackStore | None = None,
+    feedback_policy: FeedbackPolicy | PolicyFor | None = None,
 ) -> ChatChannel:
     """Build a :class:`~weave.adapters.driving.chat.ChatChannel` for ``name``.
 
@@ -295,6 +379,14 @@ def chat_channel(
     it defaults to the strict :func:`~weave.adapters.driving.identity.require` (a
     request must carry its own ``session_id``). Pass
     :func:`~weave.adapters.driving.identity.mint_if_absent` to generate one.
+
+    Pass a ``session_store`` (over the same storage as Loom's session) to accept
+    requests with ``replaces``: they regenerate that last turn instead of running a
+    new one. Without it such a request is a 400.
+
+    Pass a ``feedback_store`` (and a ``feedback_policy``: fixed, or ``target -> policy``)
+    to accept user feedback through :meth:`ChatChannel.feedback`; it reaches the
+    observers configured with ``on_feedback``.
     """
     return ChatChannel(
         name,
@@ -303,6 +395,11 @@ def chat_channel(
         registry=registry,
         kind=kind,
         session_policy=session_policy,
+        session_store=session_store,
+        regenerator=regenerate if session_store is not None else None,
+        feedback_store=feedback_store,
+        feedback_policy=feedback_policy,
+        feedback_submitter=submit_feedback,
     )
 
 
@@ -311,6 +408,9 @@ def routed_channel(
     *,
     registry: ConversationRegistry | None = None,
     session_policy: SessionPolicy | None = None,
+    session_store: RegenerableSession | None = None,
+    feedback_store: FeedbackStore | None = None,
+    feedback_policy: FeedbackPolicy | PolicyFor | None = None,
 ) -> ChatChannel:
     """Build a multi-target :class:`~weave.adapters.driving.chat.ChatChannel` (a router).
 
@@ -326,10 +426,19 @@ def routed_channel(
     a constant resolver. Mount it the same way (:func:`weave.adapters.driving.chat.chat_router`
     or :func:`weave.adapters.driving.lambda_handler.lambda_handler`). ``session_policy``
     behaves as in :func:`chat_channel` (strict :func:`~weave.adapters.driving.identity.require`
-    by default).
+    by default), and so do ``session_store``, ``feedback_store`` and ``feedback_policy``.
     """
     return ChatChannel(
-        resolve, run, streamer=stream_agent, registry=registry, session_policy=session_policy
+        resolve,
+        run,
+        streamer=stream_agent,
+        registry=registry,
+        session_policy=session_policy,
+        session_store=session_store,
+        regenerator=regenerate if session_store is not None else None,
+        feedback_store=feedback_store,
+        feedback_policy=feedback_policy,
+        feedback_submitter=submit_feedback,
     )
 
 
@@ -377,9 +486,12 @@ def run_agent_sync(
     *,
     extras: dict[str, Any] | None = None,
     model_params: dict[str, Any] | None = None,
+    turn_id: str | None = None,
 ) -> AgentReply:
     """Synchronous :func:`run_agent` — for a caller without an event loop (Lambda)."""
-    return _block_on(run_agent(name, input, session, extras=extras, model_params=model_params))
+    return _block_on(
+        run_agent(name, input, session, extras=extras, model_params=model_params, turn_id=turn_id)
+    )
 
 
 def run_workflow_sync(
@@ -389,9 +501,14 @@ def run_workflow_sync(
     *,
     extras: dict[str, Any] | None = None,
     model_params: dict[str, Any] | None = None,
+    turn_id: str | None = None,
 ) -> WorkflowReply:
     """Synchronous :func:`run_workflow` — for a caller without an event loop (Lambda)."""
-    return _block_on(run_workflow(name, input, session, extras=extras, model_params=model_params))
+    return _block_on(
+        run_workflow(
+            name, input, session, extras=extras, model_params=model_params, turn_id=turn_id
+        )
+    )
 
 
 def run_sync(
@@ -402,9 +519,20 @@ def run_sync(
     kind: str | None = None,
     extras: dict[str, Any] | None = None,
     model_params: dict[str, Any] | None = None,
+    turn_id: str | None = None,
 ) -> AgentReply | WorkflowReply:
     """Synchronous :func:`run` — one-shot dispatch by kind for a sync caller (Lambda)."""
-    return _block_on(run(name, input, session, kind=kind, extras=extras, model_params=model_params))
+    return _block_on(
+        run(
+            name,
+            input,
+            session,
+            kind=kind,
+            extras=extras,
+            model_params=model_params,
+            turn_id=turn_id,
+        )
+    )
 
 
 def fork_sync(
@@ -415,8 +543,9 @@ def fork_sync(
     *,
     at: int,
     extras: dict[str, Any] | None = None,
-    agent_id: str = "default",
+    agent_id: str | None = None,
     model_params: dict[str, Any] | None = None,
+    turn_id: str | None = None,
 ) -> AgentReply:
     """Synchronous :func:`fork` — for a caller without an event loop (Lambda)."""
     return _block_on(
@@ -429,6 +558,37 @@ def fork_sync(
             extras=extras,
             agent_id=agent_id,
             model_params=model_params,
+            turn_id=turn_id,
+        )
+    )
+
+
+def regenerate_sync(
+    store: RegenerableSession,
+    name: str,
+    input: Any,
+    session: LoomSession,
+    *,
+    replaces: str,
+    kind: str | None = None,
+    extras: dict[str, Any] | None = None,
+    agent_id: str | None = None,
+    model_params: dict[str, Any] | None = None,
+    turn_id: str | None = None,
+) -> AgentReply:
+    """Synchronous :func:`regenerate` — for a caller without an event loop (Lambda)."""
+    return _block_on(
+        regenerate(
+            store,
+            name,
+            input,
+            session,
+            replaces=replaces,
+            kind=kind,
+            extras=extras,
+            agent_id=agent_id,
+            model_params=model_params,
+            turn_id=turn_id,
         )
     )
 
@@ -442,10 +602,18 @@ def fork_stateless_sync(
     at: int | None = None,
     extras: dict[str, Any] | None = None,
     model_params: dict[str, Any] | None = None,
+    turn_id: str | None = None,
 ) -> tuple[AgentReply, list[Any]]:
     """Synchronous :func:`fork_stateless` — for a caller without an event loop (Lambda)."""
     return _block_on(
         fork_stateless(
-            name, history, input, session, at=at, extras=extras, model_params=model_params
+            name,
+            history,
+            input,
+            session,
+            at=at,
+            extras=extras,
+            model_params=model_params,
+            turn_id=turn_id,
         )
     )
