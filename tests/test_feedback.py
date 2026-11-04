@@ -111,7 +111,9 @@ class TestSubmit:
     def test_the_first_target_sticks(self):
         store = InMemoryFeedbackStore()
         _submit(store)
-        again = submit_feedback(store, _feedback(), target="support", session=SESSION, policy=POLICY)
+        again = submit_feedback(
+            store, _feedback(), target="support", session=SESSION, policy=POLICY
+        )
         assert again.target == "billing"
 
     def test_a_failing_observer_does_not_lose_the_feedback(self, caplog):

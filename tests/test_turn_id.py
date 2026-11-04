@@ -214,7 +214,9 @@ def test_the_stamp_is_persisted_and_never_reaches_the_model(tmp_path):
 class TestEdges:
     def test_emf_carries_the_id_as_a_property(self):
         rec = _Recorder()
-        asyncio.run(run_agent(_Engine(), "support", "hi", _session(), observers=[rec], turn_id="m-6"))
+        asyncio.run(
+            run_agent(_Engine(), "support", "hi", _session(), observers=[rec], turn_id="m-6")
+        )
         out = io.StringIO()
         EmfTurnObserver("A", stream=out).on_turn(rec.events[0])
         doc = json.loads(out.getvalue())
