@@ -8,6 +8,11 @@ wraps itself in once, so the timing and the observer rules live in one place:
 2. An observer that raises changes neither the reply nor the exception: it is logged
    as a ``WARNING`` here and the next observer still runs.
 3. With no observers no event is built (zero cost).
+
+Each observer hears what its method asks for: ``on_turn`` gets the :class:`TurnEvent`
+(no content), ``on_transcript`` the :class:`TurnTranscript` of an agent turn (W22) —
+question, answer and tool calls. The turn's messages are read only when some observer
+has ``on_transcript``.
 """
 
 from __future__ import annotations
@@ -17,15 +22,17 @@ import logging
 import time
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, Literal
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from loom import LoomSession, ModelSettings
 from pydantic import BaseModel, ConfigDict
 
 from weave.application.reply import Usage
+from weave.application.transcript import ToolCall, question_of, tool_calls_of, turn_messages
 
 if TYPE_CHECKING:
-    from weave.ports.observer import TurnObserver
+    from weave.ports.observer import AnyTurnObserver, TranscriptObserver, TurnObserver
 
 logger = logging.getLogger(__name__)
 
@@ -93,17 +100,53 @@ class TurnEvent(BaseModel):
         return type(current).__name__
 
 
+class TurnTranscript(BaseModel):
+    """One agent turn with its content — what a :class:`~weave.ports.observer.TranscriptObserver` stores.
+
+    The same identity and outcome as :class:`TurnEvent`, plus what was said:
+    ``question`` is the text of the message that opens the turn (read from the input, so
+    it exists even when the build fails) and ``attachments`` the type of each block that
+    is not text (``"image/png"``; the bytes are never copied). ``answer`` is the reply's
+    text, ``None`` unless the turn ended ``ok``. ``tool_calls`` come from the turn's
+    messages, read before the agent's teardown; empty when the agent was never built.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    turn_id: str
+    session_id: str
+    user_id: str
+    is_anonymous: bool
+    target: str
+    operation: Operation
+    replaces: str | None = None
+    outcome: Outcome
+    error_type: str | None = None
+    started_at: datetime
+    duration_ms: float
+    model_id: str | None = None
+    usage: Usage | None = None
+    question: str
+    attachments: tuple[str, ...] = ()
+    answer: str | None = None
+    tool_calls: tuple[ToolCall, ...] = ()
+
+
 class TurnClock:
     """The running turn: :func:`observe_turn` hands it to the use case."""
 
-    def __init__(self, *, active: bool = True) -> None:
+    def __init__(self, *, active: bool = True, transcripts: bool = False) -> None:
         self._start = time.perf_counter()
+        self.started_at = datetime.now(UTC)
         self.active = active
+        self.transcripts = transcripts
         self.build_ms: float | None = None
         self.reply: Any = None
         self.description: AgentDescription | None = None
         self.turn_id: str | None = None
         self.replaces: str | None = None
+        self.input: Any = None
+        self.tool_calls: tuple[ToolCall, ...] = ()
 
     def built(self) -> None:
         """Mark the end of the build."""
@@ -127,13 +170,28 @@ class TurnClock:
         except Exception:
             logger.warning("engine describe failed; the turn reports no model", exc_info=True)
 
+    def capture(self, agent: Any) -> None:
+        """Read the turn's tool calls from ``agent.messages``, before its teardown.
+
+        Skipped when no observer has ``on_transcript``: the messages are not even read.
+        A failure is logged and leaves ``tool_calls`` empty; the transcript is still sent.
+        """
+        if not self.transcripts or self.turn_id is None:
+            return
+        try:
+            self.tool_calls = tool_calls_of(turn_messages(agent.messages, self.turn_id))
+        except Exception:
+            logger.warning(
+                "could not read the turn's messages; the transcript has no tools", exc_info=True
+            )
+
     def elapsed_ms(self) -> float:
         return (time.perf_counter() - self._start) * 1000.0
 
 
 @contextmanager
 def observe_turn(
-    observers: Sequence[TurnObserver],
+    observers: Sequence[AnyTurnObserver],
     *,
     target: str,
     kind: Literal["agent", "workflow"],
@@ -141,31 +199,54 @@ def observe_turn(
     session: LoomSession,
     turn_id: str | None = None,
     replaces: str | None = None,
+    input: Any = None,
 ) -> Iterator[TurnClock]:
     """Time one turn and tell ``observers`` how it ended. Re-raises whatever the turn raised.
 
     The window closes when the ``with`` block exits, so the teardown inside it counts.
     ``GeneratorExit`` / ``CancelledError`` before :meth:`TurnClock.done` is ``cancelled``;
     after it, the turn already answered and stays ``ok``.
+
+    ``input`` is the turn's input as the caller gave it: the transcript's question. Only
+    agent turns with a ``turn_id`` have a transcript (a workflow is not stamped).
     """
-    clock = TurnClock(active=bool(observers))
+    # Split by method, not by type: an observer may implement both.
+    turn_observers = [
+        cast("TurnObserver", o) for o in observers if callable(getattr(o, "on_turn", None))
+    ]
+    transcript_observers = (
+        [
+            cast("TranscriptObserver", o)
+            for o in observers
+            if callable(getattr(o, "on_transcript", None))
+        ]
+        if kind == "agent" and turn_id is not None
+        else []
+    )
+    clock = TurnClock(active=bool(observers), transcripts=bool(transcript_observers))
     clock.turn_id = turn_id
     clock.replaces = replaces
+    clock.input = input
+
+    def finish(outcome: Outcome, error: BaseException | None = None) -> None:
+        event = _event(clock, outcome, target, kind, operation, session, error=error)
+        _notify(turn_observers, event)
+        if transcript_observers:
+            _notify_transcripts(transcript_observers, clock, event)
+
     try:
         yield clock
     except BaseException as exc:
         if observers:
             if clock.reply is not None and isinstance(exc, GeneratorExit | asyncio.CancelledError):
-                _notify(observers, _event(clock, "ok", target, kind, operation, session))
+                finish("ok")
             elif isinstance(exc, GeneratorExit | asyncio.CancelledError):
-                _notify(observers, _event(clock, "cancelled", target, kind, operation, session))
+                finish("cancelled")
             else:
-                _notify(
-                    observers, _event(clock, "error", target, kind, operation, session, error=exc)
-                )
+                finish("error", exc)
         raise
     if observers:
-        _notify(observers, _event(clock, "ok", target, kind, operation, session))
+        finish("ok")
 
 
 def _event(
@@ -200,6 +281,52 @@ def _event(
         turn_id=clock.turn_id,
         replaces=clock.replaces,
     )
+
+
+def _transcript(clock: TurnClock, event: TurnEvent) -> TurnTranscript:
+    question, attachments = question_of(clock.input)
+    reply = clock.reply if event.outcome == "ok" else None
+    return TurnTranscript(
+        turn_id=str(event.turn_id),
+        session_id=event.session_id,
+        user_id=event.user_id,
+        is_anonymous=event.is_anonymous,
+        target=event.target,
+        operation=event.operation,
+        replaces=event.replaces,
+        outcome=event.outcome,
+        error_type=event.error_type,
+        started_at=clock.started_at,
+        duration_ms=event.duration_ms,
+        model_id=event.model_id,
+        usage=event.usage,
+        question=question,
+        attachments=attachments,
+        answer=getattr(reply, "text", None),
+        tool_calls=clock.tool_calls,
+    )
+
+
+def _notify_transcripts(
+    observers: Sequence[TranscriptObserver], clock: TurnClock, event: TurnEvent
+) -> None:
+    try:
+        transcript = _transcript(clock, event)
+    except Exception:
+        logger.warning(
+            "could not build the turn transcript (target=%s)", event.target, exc_info=True
+        )
+        return
+    for observer in observers:
+        try:
+            observer.on_transcript(transcript)
+        except Exception:
+            logger.warning(
+                "transcript observer %s failed (target=%s)",
+                type(observer).__name__,
+                event.target,
+                exc_info=True,
+            )
 
 
 def _notify(observers: Sequence[TurnObserver], event: TurnEvent) -> None:

@@ -33,7 +33,12 @@ if TYPE_CHECKING:
 
     from weave.ports.agent_engine import AgentEngine
     from weave.ports.feedback import FeedbackStore
-    from weave.ports.observer import FeedbackObserver, TurnObserver
+    from weave.ports.observer import (
+        AnyTurnObserver,
+        FeedbackObserver,
+        TranscriptObserver,
+        TurnObserver,
+    )
 
 _T = TypeVar("_T")
 
@@ -42,9 +47,10 @@ logger = logging.getLogger(__name__)
 # Default engine: Loom over the filesystem workspace. The wired top-level functions
 # read this at call time, so configure() (below) can swap it once at startup.
 _engine: AgentEngine = LoomAgentEngine()
-# Turn and feedback observers (metrics, audit). Same lifecycle as the engine: fixed by
-# configure(), which hands each list the observers that have its method.
-_observers: tuple[TurnObserver, ...] = ()
+# Turn and feedback observers (metrics, audit, transcripts). Same lifecycle as the engine:
+# fixed by configure(), which hands each list the observers that have its method. The
+# use cases get the turn list and tell each observer what its method asks for.
+_observers: tuple[AnyTurnObserver, ...] = ()
 _feedback_observers: tuple[FeedbackObserver, ...] = ()
 
 
@@ -52,7 +58,7 @@ def configure(
     *,
     source: ConfigSource | None = None,
     engine: AgentEngine | None = None,
-    observers: Sequence[TurnObserver | FeedbackObserver] = (),
+    observers: Sequence[TurnObserver | FeedbackObserver | TranscriptObserver] = (),
 ) -> None:
     """Set the engine and turn observers the wired top-level functions use — the composition root.
 
@@ -78,7 +84,10 @@ def configure(
 
     An observer with ``on_feedback`` also hears every feedback request submitted through
     a channel (:meth:`~weave.adapters.driving.chat.ChatChannel.feedback`); one may have
-    both methods (``EmfTurnObserver`` does).
+    both methods (``EmfTurnObserver`` does). One with ``on_transcript`` hears each agent
+    turn **with its content** (:class:`~weave.application.observe.TurnTranscript`)::
+
+        weave.configure(observers=[EmfTurnObserver("Acme/Agents"), S3TranscriptObserver(bucket)])
 
     ``configure`` fixes **all** the wiring at once: calling it without ``observers``
     removes the ones set before.
@@ -87,13 +96,18 @@ def configure(
     if source is not None and engine is not None:
         raise HarnessError("configure() takes either source or engine, not both.")
     _engine = engine if engine is not None else LoomAgentEngine(source=source)
-    _observers = tuple(o for o in observers if callable(getattr(o, "on_turn", None)))
+    _observers = tuple(
+        o
+        for o in observers
+        if callable(getattr(o, "on_turn", None)) or callable(getattr(o, "on_transcript", None))
+    )
     _feedback_observers = tuple(o for o in observers if callable(getattr(o, "on_feedback", None)))
     logger.info(
-        "engine configured: %s (observers=%d, feedback observers=%d)",
+        "engine configured: %s (observers=%d, feedback observers=%d, transcript observers=%d)",
         type(_engine).__name__,
-        len(_observers),
+        sum(1 for o in _observers if callable(getattr(o, "on_turn", None))),
         len(_feedback_observers),
+        sum(1 for o in _observers if callable(getattr(o, "on_transcript", None))),
     )
 
 
