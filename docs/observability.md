@@ -198,6 +198,97 @@ defaults:
     - metrics: { sink: emf, namespace: Acme/Agents, include: [breakdown, tools] }
 ```
 
+## Turn transcripts
+
+Metrics say *how* a turn went; a transcript says *what was said*: who asked, the question,
+the answer and the tools the agent called. One `TurnTranscript` per agent turn, handed
+to every observer with `on_transcript`:
+
+```python
+import weave
+from weave import EmfTurnObserver, S3TranscriptObserver
+
+weave.configure(
+    observers=[
+        EmfTurnObserver("Acme/Agents"),
+        S3TranscriptObserver("acme-agents-data", prefix="turns/"),
+    ]
+)
+```
+
+It is a separate port from `on_turn` on purpose: `TurnEvent` never carries content, so a
+metrics observer never sees what users wrote. Storing it is the product's explicit choice.
+
+| Field | What it is |
+| --- | --- |
+| `turn_id`, `session_id`, `user_id`, `is_anonymous` | The turn and who asked (the effective session) |
+| `target`, `operation`, `replaces` | Which agent, and whether it was a `run`, `stream`, `fork` or `regenerate` |
+| `outcome`, `error_type` | `ok`, `error` or `cancelled`, as in `TurnEvent` |
+| `started_at`, `duration_ms`, `model_id`, `usage` | When (UTC), how long, which model, tokens |
+| `question`, `attachments` | The text of the message that opens the turn; the type of each non-text block (`"image/png"`) |
+| `answer` | The reply's text; `None` unless the turn ended `ok` |
+| `tool_calls` | Each tool call: `name`, `input`, `status` and `result` |
+
+- **The question comes from the input**, so a turn whose build failed still has one.
+- **The tool calls come from the turn's messages**: from the one stamped with its
+  `turn_id` to the end, read before the agent's teardown. The messages are read only
+  when some observer has `on_transcript`.
+- **Never copied:** the bytes of images and documents, and the request's headers or
+  `extras` (they may carry credentials).
+- **Workflows and bidi streams have no transcript.** A workflow's input is not stamped
+  and each node has its own messages.
+
+### `S3TranscriptObserver`
+
+One JSON object per turn at `{prefix}dt={YYYY-MM-DD}/{session_id}/{turn_id}.json`, the
+day being the turn's start in UTC. A regenerated turn is another object (another
+`turn_id`, with `replaces`), so the answer it replaced is kept — usually the one that got
+the thumbs-down. Needs `weave[aws]`.
+
+Tool **results** are dropped unless `include_tool_results=True`: they can be large and
+carry personal data. The tool's `input` is always kept.
+
+The write is a synchronous `PutObject` (Lambda freezes the process when the handler
+returns). A failure is logged as a `WARNING` and the turn still answers.
+
+!!! warning "Personal data"
+    A transcript holds what users wrote, keyed by their `user_id`. Retention (a lifecycle
+    rule on the prefix) and who can read the prefix are the product's to decide.
+
+### Querying with Athena
+
+A table with partition projection on `dt`, so no crawler or `MSCK REPAIR` is needed:
+
+```sql
+CREATE EXTERNAL TABLE turns (
+  turn_id string, session_id string, user_id string, is_anonymous boolean,
+  target string, operation string, replaces string, outcome string, error_type string,
+  started_at string, duration_ms double, model_id string,
+  question string, answer string,
+  tool_calls array<struct<tool_use_id:string, name:string, status:string>>
+)
+PARTITIONED BY (dt string)
+ROW FORMAT SERDE 'org.openx.data.jsonserde.JsonSerDe'
+LOCATION 's3://acme-agents-data/turns/'
+TBLPROPERTIES (
+  'projection.enabled' = 'true',
+  'projection.dt.type' = 'date',
+  'projection.dt.format' = 'yyyy-MM-dd',
+  'projection.dt.range' = '2026-01-01,NOW',
+  'storage.location.template' = 's3://acme-agents-data/turns/dt=${dt}/'
+);
+```
+
+Joined with the feedback records (`S3FeedbackStore`, see [feedback](feedback.md)) by
+`(session_id, turn_id)`, it shows the exact answer each thumbs-down was about:
+
+```sql
+SELECT t.user_id, t.target, t.question, t.answer, f.issues, f.comment
+FROM turns t
+JOIN feedback f ON f.session_id = t.session_id AND f.turn_id = t.turn_id
+WHERE t.dt >= '2026-11-01' AND f.rating = 'down';
+```
+
 ## Tracing
 
 For latency, token usage, and cold-start spans, **traces beat logs**. Strands (under

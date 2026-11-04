@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
     from weave.application.feedback import FeedbackEvent
-    from weave.application.observe import TurnEvent
+    from weave.application.observe import TurnEvent, TurnTranscript
 
 
 @runtime_checkable
@@ -35,3 +35,21 @@ class FeedbackObserver(Protocol):
     """
 
     def on_feedback(self, event: FeedbackEvent) -> None: ...
+
+
+@runtime_checkable
+class TranscriptObserver(Protocol):
+    """Receives one :class:`~weave.application.observe.TurnTranscript` per agent turn (W22).
+
+    The turn **with its content**: the user's question, the answer and the tool calls
+    (with their results). A separate port on purpose, so a metrics observer never sees
+    what users wrote; storing it is the product's explicit choice. Same rules as
+    :class:`TurnObserver`: synchronous, called in order, and one that raises is logged
+    and skipped.
+    """
+
+    def on_transcript(self, transcript: TurnTranscript) -> None: ...
+
+
+#: What a use case's ``observers`` accepts: each one hears what its method asks for.
+AnyTurnObserver = TurnObserver | TranscriptObserver

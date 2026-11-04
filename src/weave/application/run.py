@@ -33,7 +33,7 @@ from weave.ports.agent_engine import AgentEngine
 from weave.ports.session import MutableSession, RegenerableSession
 
 if TYPE_CHECKING:
-    from weave.ports.observer import TurnObserver
+    from weave.ports.observer import AnyTurnObserver
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +46,7 @@ async def run_agent(
     *,
     extras: dict[str, Any] | None = None,
     model_params: dict[str, Any] | None = None,
-    observers: Sequence[TurnObserver] = (),
+    observers: Sequence[AnyTurnObserver] = (),
     turn_id: str | None = None,
 ) -> AgentReply:
     """Build agent ``name``, run one turn, and return a shaped :class:`AgentReply`.
@@ -69,7 +69,13 @@ async def run_agent(
     """
     turn_id = resolve_turn_id(turn_id)
     with observe_turn(
-        observers, target=name, kind="agent", operation="run", session=session, turn_id=turn_id
+        observers,
+        target=name,
+        kind="agent",
+        operation="run",
+        session=session,
+        turn_id=turn_id,
+        input=input,
     ) as turn:
         logger.debug("building agent %r (session=%s turn=%s)", name, session.session_id, turn_id)
         agent = engine.build_agent(name, session, model_params=model_params)
@@ -82,6 +88,7 @@ async def run_agent(
             raise HarnessError(f"agent '{name}' failed during execution: {exc}") from exc
         finally:
             turn.describe(engine, agent)
+            turn.capture(agent)
             agent.cleanup()
             logger.debug(
                 "tore down agent %r (session=%s turn=%s)", name, session.session_id, turn_id
@@ -103,7 +110,7 @@ async def stream_agent(
     *,
     extras: dict[str, Any] | None = None,
     model_params: dict[str, Any] | None = None,
-    observers: Sequence[TurnObserver] = (),
+    observers: Sequence[AnyTurnObserver] = (),
     turn_id: str | None = None,
 ) -> AsyncIterator[ChatStreamEvent]:
     """Build agent ``name`` and stream one turn as :class:`ChatStreamEvent`s.
@@ -125,7 +132,13 @@ async def stream_agent(
     """
     turn_id = resolve_turn_id(turn_id)
     with observe_turn(
-        observers, target=name, kind="agent", operation="stream", session=session, turn_id=turn_id
+        observers,
+        target=name,
+        kind="agent",
+        operation="stream",
+        session=session,
+        turn_id=turn_id,
+        input=input,
     ) as turn:
         logger.debug(
             "building agent %r to stream (session=%s turn=%s)", name, session.session_id, turn_id
@@ -150,6 +163,7 @@ async def stream_agent(
             raise HarnessError(f"agent '{name}' failed during streaming: {exc}") from exc
         finally:
             turn.describe(engine, agent)
+            turn.capture(agent)
             agent.cleanup()
             logger.debug(
                 "tore down streamed agent %r (session=%s turn=%s)",
@@ -167,7 +181,7 @@ async def run_workflow(
     *,
     extras: dict[str, Any] | None = None,
     model_params: dict[str, Any] | None = None,
-    observers: Sequence[TurnObserver] = (),
+    observers: Sequence[AnyTurnObserver] = (),
     turn_id: str | None = None,
 ) -> WorkflowReply:
     """Build multi-agent workflow ``name``, run it once, return a :class:`WorkflowReply`.
@@ -219,7 +233,7 @@ async def fork(
     extras: dict[str, Any] | None = None,
     agent_id: str | None = None,
     model_params: dict[str, Any] | None = None,
-    observers: Sequence[TurnObserver] = (),
+    observers: Sequence[AnyTurnObserver] = (),
     turn_id: str | None = None,
 ) -> AgentReply:
     """Rewind a **persisted** conversation to ``at`` and continue with ``input``.
@@ -256,7 +270,13 @@ async def fork(
     """
     turn_id = resolve_turn_id(turn_id)
     with observe_turn(
-        observers, target=name, kind="agent", operation="fork", session=session, turn_id=turn_id
+        observers,
+        target=name,
+        kind="agent",
+        operation="fork",
+        session=session,
+        turn_id=turn_id,
+        input=input,
     ) as turn:
         if not isinstance(store, MutableSession):
             raise HarnessError(
@@ -278,6 +298,7 @@ async def fork(
             raise HarnessError(f"fork of '{name}' failed during execution: {exc}") from exc
         finally:
             turn.describe(engine, agent)
+            turn.capture(agent)
             agent.cleanup()
 
         reply = agent_reply_from_result(result, session, target=name, turn_id=turn_id)
@@ -297,7 +318,7 @@ async def regenerate(
     extras: dict[str, Any] | None = None,
     agent_id: str | None = None,
     model_params: dict[str, Any] | None = None,
-    observers: Sequence[TurnObserver] = (),
+    observers: Sequence[AnyTurnObserver] = (),
     turn_id: str | None = None,
 ) -> AgentReply:
     """Overwrite the **last** turn ``replaces`` of a persisted conversation and run ``input``.
@@ -349,6 +370,7 @@ async def regenerate(
         session=session,
         turn_id=turn_id,
         replaces=replaces,
+        input=input,
     ) as turn:
         _truncate(store, name, session, keep=start, agent_id=resolved_id)
         agent = engine.build_agent(name, session, model_params=model_params)
@@ -362,6 +384,7 @@ async def regenerate(
             raise HarnessError(f"regenerate of '{name}' failed during execution: {exc}") from exc
         finally:
             turn.describe(engine, agent)
+            turn.capture(agent)
             agent.cleanup()
 
         reply = agent_reply_from_result(
@@ -381,7 +404,7 @@ async def fork_stateless(
     at: int | None = None,
     extras: dict[str, Any] | None = None,
     model_params: dict[str, Any] | None = None,
-    observers: Sequence[TurnObserver] = (),
+    observers: Sequence[AnyTurnObserver] = (),
     turn_id: str | None = None,
 ) -> tuple[AgentReply, list[Any]]:
     """Like :func:`fork`, but for stateless agents — the caller owns the transcript.
@@ -392,7 +415,13 @@ async def fork_stateless(
     """
     turn_id = resolve_turn_id(turn_id)
     with observe_turn(
-        observers, target=name, kind="agent", operation="fork", session=session, turn_id=turn_id
+        observers,
+        target=name,
+        kind="agent",
+        operation="fork",
+        session=session,
+        turn_id=turn_id,
+        input=input,
     ) as turn:
         agent = engine.build_agent(name, session, model_params=model_params)
         turn.built()
@@ -405,6 +434,7 @@ async def fork_stateless(
             raise HarnessError(f"fork of '{name}' failed during execution: {exc}") from exc
         finally:
             turn.describe(engine, agent)
+            turn.capture(agent)
             agent.cleanup()
 
         reply = agent_reply_from_result(result, session, target=name, turn_id=turn_id)
@@ -467,7 +497,7 @@ async def run(
     kind: str | None = None,
     extras: dict[str, Any] | None = None,
     model_params: dict[str, Any] | None = None,
-    observers: Sequence[TurnObserver] = (),
+    observers: Sequence[AnyTurnObserver] = (),
     turn_id: str | None = None,
 ) -> AgentReply | WorkflowReply:
     """Run ``name`` one-shot, dispatching by kind (discovered unless ``kind`` is given).
