@@ -116,6 +116,103 @@ class TestBody:
             {"json": {"customer_id": 1, "phone": "555-0100"}}
         ]
 
+    def test_policy_decides_per_call(self):
+        """W24: tool_result keeps what it returns for each call, and drops it on None."""
+        s3 = _FakeS3()
+        transcript = _transcript(
+            tool_calls=(
+                ToolCall(
+                    tool_use_id="tu-1",
+                    name="search_docs",
+                    input={"query": "refunds"},
+                    status="success",
+                    result=[{"text": "long passage with 555-0100"}],
+                ),
+                ToolCall(
+                    tool_use_id="tu-2",
+                    name="search_orders",
+                    input={"customer_id": 1},
+                    status="success",
+                    result=[{"json": {"phone": "555-0100"}}],
+                ),
+            )
+        )
+
+        def policy(call: ToolCall):
+            if call.name == "search_docs":
+                return [{"json": {"sources": ["s3://docs/refunds.pdf"]}}]
+            return None
+
+        S3TranscriptObserver("bucket", tool_result=policy, client=s3).on_transcript(transcript)
+
+        (put,) = s3.objects.values()
+        body = json.loads(put["Body"])
+        assert [c["result"] for c in body["tool_calls"]] == [
+            [{"json": {"sources": ["s3://docs/refunds.pdf"]}}],
+            None,
+        ]
+        assert [c["input"] for c in body["tool_calls"]] == [
+            {"query": "refunds"},
+            {"customer_id": 1},
+        ]
+        assert "555-0100" not in put["Body"].decode("utf-8")
+
+    def test_policy_sees_the_whole_call(self):
+        seen: list[ToolCall] = []
+        S3TranscriptObserver(
+            "bucket", tool_result=lambda c: seen.append(c), client=_FakeS3()
+        ).on_transcript(_transcript())
+
+        (call,) = seen
+        assert (call.name, call.input, call.status, call.result) == (
+            "search_orders",
+            {"customer_id": 1},
+            "success",
+            [{"json": {"customer_id": 1, "phone": "555-0100"}}],
+        )
+
+    def test_policy_that_raises_drops_that_result_only(self, caplog):
+        s3 = _FakeS3()
+        transcript = _transcript(
+            tool_calls=(
+                ToolCall(
+                    tool_use_id="tu-1", name="broken", status="success", result=[{"text": "a"}]
+                ),
+                ToolCall(tool_use_id="tu-2", name="fine", status="success", result=[{"text": "b"}]),
+            )
+        )
+
+        def policy(call: ToolCall):
+            if call.name == "broken":
+                raise KeyError("boom")
+            return call.result
+
+        with caplog.at_level(logging.WARNING, logger="weave.adapters.driven.s3_transcripts"):
+            S3TranscriptObserver("bucket", tool_result=policy, client=s3).on_transcript(transcript)
+
+        (put,) = s3.objects.values()
+        body = json.loads(put["Body"])
+        assert [c["result"] for c in body["tool_calls"]] == [None, [{"text": "b"}]]
+        assert "'broken'" in caplog.text
+
+    @pytest.mark.parametrize("wrong", [{"sources": []}, "text", [1, 2]])
+    def test_policy_with_the_wrong_shape_drops_the_result(self, wrong, caplog):
+        s3 = _FakeS3()
+        with caplog.at_level(logging.WARNING, logger="weave.adapters.driven.s3_transcripts"):
+            S3TranscriptObserver("bucket", tool_result=lambda c: wrong, client=s3).on_transcript(
+                _transcript()
+            )
+
+        (put,) = s3.objects.values()
+        assert json.loads(put["Body"])["tool_calls"][0]["result"] is None
+        assert "did not return a list of blocks" in caplog.text
+
+    def test_policy_and_include_tool_results_exclude_each_other(self):
+        with pytest.raises(ValueError, match="not both"):
+            S3TranscriptObserver(
+                "bucket", include_tool_results=True, tool_result=lambda c: None, client=_FakeS3()
+            )
+
     def test_utf8(self):
         s3 = _FakeS3()
         S3TranscriptObserver("bucket", client=s3).on_transcript(_transcript())

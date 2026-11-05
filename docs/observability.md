@@ -245,8 +245,33 @@ day being the turn's start in UTC. A regenerated turn is another object (another
 `turn_id`, with `replaces`), so the answer it replaced is kept — usually the one that got
 the thumbs-down. Needs `weave[aws]`.
 
-Tool **results** are dropped unless `include_tool_results=True`: they can be large and
-carry personal data. The tool's `input` is always kept.
+Tool **results** are dropped by default: they can be large and carry personal data. The
+tool's `input` is always kept. Two ways to keep them:
+
+- `include_tool_results=True` keeps every result whole.
+- `tool_result=` decides per call. It receives the `ToolCall` (`name`, `input`, `status`,
+  `result`) and returns the content blocks to store, or `None` to drop the result. It
+  excludes `include_tool_results`.
+
+For example, to record which documents a knowledge-base search returned without storing
+its passages, with Loom's `builtin.kb` and its default name `kb_search`:
+
+```python
+from loom.builtins import kb_sources
+from weave import S3TranscriptObserver, ToolCall
+
+
+def sources_only(call: ToolCall):
+    if call.name == "kb_search":
+        return [{"json": {"sources": kb_sources(call.result)}}]
+    return None  # every other tool: input only
+
+
+S3TranscriptObserver("acme-agents-data", tool_result=sources_only)
+```
+
+A call the policy raises on, or returns something other than a list of blocks for, is
+stored without result and logged as a `WARNING`; the rest of the transcript is written.
 
 The write is a synchronous `PutObject` (Lambda freezes the process when the handler
 returns). A failure is logged as a `WARNING` and the turn still answers.
